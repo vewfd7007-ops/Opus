@@ -1,56 +1,102 @@
-// === HOOP RUSH — 3-lane street runner ===
+// === HOOP RUSH 3D — Three.js endless 3-lane runner ===
+// Renders with WebGL via Three.js (loaded as global THREE from CDN).
+// Preserves the original gameplay: 3 lanes, skins, power-ups, coins,
+// obstacle patterns, persistence keys (hr_coins, hr_high, hr_unlocked, hr_skin).
 'use strict';
 
+/* =============================================================
+ * 1. THREE.js core setup
+ * ============================================================= */
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
 
-let W = 0, H = 0, DPR = 1;
-function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width = W * DPR;
-  canvas.height = H * DPR;
-  canvas.style.width = W + 'px';
-  canvas.style.height = H + 'px';
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-}
-window.addEventListener('resize', resize);
-resize();
+const renderer = new THREE.WebGLRenderer({
+  canvas: canvas,
+  antialias: true,
+  powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight, false);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
 
-// === Game state ===
+const SKY_COLOR    = new THREE.Color('#7ec8ff');
+const HORIZON_FOG  = new THREE.Color('#ffd9a8');
+
+const scene = new THREE.Scene();
+scene.background = SKY_COLOR;
+scene.fog = new THREE.Fog(HORIZON_FOG, 35, 130);
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  window.innerWidth / Math.max(1, window.innerHeight),
+  0.1,
+  300,
+);
+camera.position.set(0, 4.4, 8.5);
+camera.lookAt(0, 1.4, -6);
+
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / Math.max(1, h);
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h, false);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+});
+
+/* =============================================================
+ * 2. Game state / constants
+ * ============================================================= */
 const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, OVER: 3 };
 let state = STATE.MENU;
-let menuView = 'main'; // main | skins | howto
+let menuView = 'main';
 
 let score = 0;
-let coins = 0;            // coins this run
+let coins = 0;
 let totalCoins = parseInt(localStorage.getItem('hr_coins') || '0', 10);
-let highScore = parseInt(localStorage.getItem('hr_high') || '0', 10);
+let highScore  = parseInt(localStorage.getItem('hr_high')  || '0', 10);
 
-const baseSpeed = 11;
-let speed = baseSpeed;
-let distance = 0;
-let runDistanceM = 0;     // meters for HUD
+const LANES_X = [-3, 0, 3];
+const LANE_W  = 3;
+
+// World units / second
+const BASE_SPEED   = 22;
+const MAX_SPEED    = 38;
+const ROCKET_BOOST = 8;
+let speed = BASE_SPEED;
+let distance = 0;       // in world units
+let runDistanceM = 0;   // displayed in HUD
 let spawnTimer = 1.0;
 
-let obstacles = [];
-let collectibles = [];
-let particles = [];
-let scenery = [];
+// Jump physics
+const GRAVITY = 28;     // m/s^2
+const JUMP_VY = 12;     // m/s initial upward
+const SLIDE_TIME = 0.85;
 
-// Power-ups (timers in seconds; 0 = inactive)
+// Lane change duration (visual)
+const LANE_CHANGE_TIME = 0.22;
+
 const power = { magnet: 0, multi: 0, shield: 0, rocket: 0 };
 
-// === Skins ===
-// All skins are unlocked by default for fun OR cost coins
+let obstacles    = [];
+let collectibles = [];
+let particles    = [];
+let scenery      = [];
+let stripes      = [];
+
+/* =============================================================
+ * 3. Skins (same schema as the original 2D game)
+ * ============================================================= */
 const SKINS = [
-  { id: 'rookie',  name: 'ROOKIE',  cost: 0,    jersey1: '#e74c3c', jersey2: '#c8102e', shorts: '#1a2330', skinTone: '#d49b6b', hair: '#1a0e08', headband: '#ff8c3a', shoeStripe: '#ff8c3a', number: '1' },
+  { id: 'rookie',  name: 'ROOKIE',   cost: 0,    jersey1: '#e74c3c', jersey2: '#c8102e', shorts: '#1a2330', skinTone: '#d49b6b', hair: '#1a0e08', headband: '#ff8c3a', shoeStripe: '#ff8c3a', number: '1' },
   { id: 'allstar', name: 'ALL-STAR', cost: 200,  jersey1: '#9b59b6', jersey2: '#6a2a8a', shorts: '#fff7d0', skinTone: '#c08850', hair: '#3a1a08', headband: '#ffd84a', shoeStripe: '#ffd84a', number: '7' },
-  { id: 'champ',   name: 'CHAMP',    cost: 500,  jersey1: '#2ea83a', jersey2: '#176022', shorts: '#fff',    skinTone: '#5a3520', hair: '#0a0500', headband: '#fff',    shoeStripe: '#2ea83a', number: '23' },
-  { id: 'mvp',     name: 'MVP',      cost: 1000, jersey1: '#ffd84a', jersey2: '#c8a022', shorts: '#1a2330', skinTone: '#e6c090', hair: '#c8a022', headband: '#fff',    shoeStripe: '#ffd84a', number: '0' },
+  { id: 'champ',   name: 'CHAMP',    cost: 500,  jersey1: '#2ea83a', jersey2: '#176022', shorts: '#ffffff', skinTone: '#5a3520', hair: '#0a0500', headband: '#ffffff', shoeStripe: '#2ea83a', number: '23' },
+  { id: 'mvp',     name: 'MVP',      cost: 1000, jersey1: '#ffd84a', jersey2: '#c8a022', shorts: '#1a2330', skinTone: '#e6c090', hair: '#c8a022', headband: '#ffffff', shoeStripe: '#ffd84a', number: '0' },
   { id: 'shadow',  name: 'SHADOW',   cost: 1500, jersey1: '#3a3a4a', jersey2: '#0a0a14', shorts: '#0a0a14', skinTone: '#a07050', hair: '#1a1a24', headband: '#ff3a3a', shoeStripe: '#ff3a3a', number: '8' },
-  { id: 'ice',     name: 'ICE',      cost: 2000, jersey1: '#a8e0ff', jersey2: '#3a98e8', shorts: '#fff',    skinTone: '#e8c8a8', hair: '#dfe8f2', headband: '#3a98e8', shoeStripe: '#a8e0ff', number: '3' },
+  { id: 'ice',     name: 'ICE',      cost: 2000, jersey1: '#a8e0ff', jersey2: '#3a98e8', shorts: '#ffffff', skinTone: '#e8c8a8', hair: '#dfe8f2', headband: '#3a98e8', shoeStripe: '#a8e0ff', number: '3' },
 ];
 
 let unlockedSkins = JSON.parse(localStorage.getItem('hr_unlocked') || '["rookie"]');
@@ -59,81 +105,890 @@ let currentSkinId = localStorage.getItem('hr_skin') || 'rookie';
 function getSkin() {
   return SKINS.find((s) => s.id === currentSkinId) || SKINS[0];
 }
+
 function saveProgress() {
-  localStorage.setItem('hr_coins', String(totalCoins));
-  localStorage.setItem('hr_high', String(highScore));
+  localStorage.setItem('hr_coins',    String(totalCoins));
+  localStorage.setItem('hr_high',     String(highScore));
   localStorage.setItem('hr_unlocked', JSON.stringify(unlockedSkins));
-  localStorage.setItem('hr_skin', currentSkinId);
+  localStorage.setItem('hr_skin',     currentSkinId);
 }
 
-// === Pseudo-3D perspective for 3 lanes ===
-function vanishY() { return H * 0.36; }
-function groundY() { return H * 0.84; }
-function getScale(d) { return 360 / (360 + Math.max(0, d)); }
-function projectY(d) {
-  const s = getScale(d);
-  return vanishY() + (groundY() - vanishY()) * s;
-}
-// Lane 0 = left, 1 = center, 2 = right
-const LANE_BASE_X = [0.32, 0.50, 0.68]; // fraction of W at ground
-function laneXAt(laneIdx, d) {
-  const s = getScale(d);
-  const baseX = LANE_BASE_X[laneIdx] * W;
-  return W / 2 + (baseX - W / 2) * s;
-}
-function laneXAtVisual(laneVisual, d) {
-  const s = getScale(d);
-  // interpolate between LANE_BASE_X positions based on float lane
-  const i0 = Math.floor(laneVisual);
-  const i1 = Math.min(2, i0 + 1);
-  const f = laneVisual - i0;
-  const baseX = (LANE_BASE_X[i0] + (LANE_BASE_X[i1] - LANE_BASE_X[i0]) * f) * W;
-  return W / 2 + (baseX - W / 2) * s;
-}
-// Edges of the street (slightly outside outer lanes)
-function streetEdgeXAt(side, d) {
-  const s = getScale(d);
-  const baseX = (side === 'L' ? 0.18 : 0.82) * W;
-  return W / 2 + (baseX - W / 2) * s;
+/* =============================================================
+ * 4. Lighting
+ * ============================================================= */
+const hemi = new THREE.HemisphereLight(0xbfe4ff, 0x4a6a3a, 0.85);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xfff2c8, 1.15);
+sun.position.set(18, 28, 12);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.near = 0.5;
+sun.shadow.camera.far  = 80;
+sun.shadow.camera.left   = -16;
+sun.shadow.camera.right  =  16;
+sun.shadow.camera.top    =  20;
+sun.shadow.camera.bottom = -20;
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+scene.add(sun.target);
+
+// Visible sun disk in the sky (large, far, additive-ish glow)
+const sunDisk = new THREE.Mesh(
+  new THREE.SphereGeometry(6, 24, 24),
+  new THREE.MeshBasicMaterial({ color: 0xfff5c8, fog: false }),
+);
+sunDisk.position.set(60, 50, -120);
+scene.add(sunDisk);
+
+const sunHalo = new THREE.Mesh(
+  new THREE.SphereGeometry(11, 24, 24),
+  new THREE.MeshBasicMaterial({
+    color: 0xffd99a,
+    transparent: true,
+    opacity: 0.35,
+    fog: false,
+  }),
+);
+sunHalo.position.copy(sunDisk.position);
+scene.add(sunHalo);
+
+/* =============================================================
+ * 5. World — ground, road, sidewalks, curbs, lane stripes
+ * ============================================================= */
+const ROAD_LENGTH = 240; // visible road plane length
+const ROAD_WIDTH  = 9.6; // 3 lanes * 3.2
+
+// Grass
+const grass = new THREE.Mesh(
+  new THREE.PlaneGeometry(400, ROAD_LENGTH * 1.2),
+  new THREE.MeshLambertMaterial({ color: 0x6cbf5a }),
+);
+grass.rotation.x = -Math.PI / 2;
+grass.position.y = -0.02;
+grass.receiveShadow = true;
+scene.add(grass);
+
+// Asphalt road (3 lanes wide)
+const road = new THREE.Mesh(
+  new THREE.PlaneGeometry(ROAD_WIDTH, ROAD_LENGTH * 1.2),
+  new THREE.MeshLambertMaterial({ color: 0x3a3f48 }),
+);
+road.rotation.x = -Math.PI / 2;
+road.position.y = 0.0;
+road.receiveShadow = true;
+scene.add(road);
+
+// Sidewalks (light concrete band on each side)
+const sidewalkMat = new THREE.MeshLambertMaterial({ color: 0xb8b8b0 });
+const sidewalkGeo = new THREE.PlaneGeometry(2.6, ROAD_LENGTH * 1.2);
+const sidewalkL = new THREE.Mesh(sidewalkGeo, sidewalkMat);
+sidewalkL.rotation.x = -Math.PI / 2;
+sidewalkL.position.set(-(ROAD_WIDTH / 2 + 1.3), 0.05, 0);
+sidewalkL.receiveShadow = true;
+scene.add(sidewalkL);
+
+const sidewalkR = sidewalkL.clone();
+sidewalkR.position.x = (ROAD_WIDTH / 2 + 1.3);
+scene.add(sidewalkR);
+
+// Raised curbs
+const curbMat = new THREE.MeshLambertMaterial({ color: 0x868682 });
+const curbGeo = new THREE.BoxGeometry(0.2, 0.2, ROAD_LENGTH * 1.2);
+const curbL = new THREE.Mesh(curbGeo, curbMat);
+curbL.position.set(-(ROAD_WIDTH / 2 + 0.1), 0.1, 0);
+curbL.receiveShadow = true;
+curbL.castShadow = true;
+scene.add(curbL);
+const curbR = curbL.clone();
+curbR.position.x = (ROAD_WIDTH / 2 + 0.1);
+scene.add(curbR);
+
+// Lane stripes — recycled pool of small white planes
+const STRIPE_COUNT = 24;
+const STRIPE_LENGTH = 3.0;
+const STRIPE_GAP    = 5.0;
+const STRIPE_TOTAL  = STRIPE_LENGTH + STRIPE_GAP;
+const stripeGeo = new THREE.PlaneGeometry(0.18, STRIPE_LENGTH);
+const stripeMat = new THREE.MeshBasicMaterial({ color: 0xfff5d8 });
+
+for (let i = 0; i < STRIPE_COUNT; i++) {
+  // Two divider rows: between lane 0/1 and lane 1/2
+  for (const lineX of [(LANES_X[0] + LANES_X[1]) / 2, (LANES_X[1] + LANES_X[2]) / 2]) {
+    const m = new THREE.Mesh(stripeGeo, stripeMat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(lineX, 0.011, -i * STRIPE_TOTAL + 8);
+    scene.add(m);
+    stripes.push(m);
+  }
 }
 
-// === Player ===
-const player = {
-  lane: 1,
-  visualLane: 1,
-  y: 0,
-  vy: 0,
-  state: 'run',          // run | crossover | slide | dunk | rocket
-  stateTimer: 0,
-  animTime: 0,
-  trail: 0,
+/* =============================================================
+ * 6. Scenery — palms, lampposts, low buildings (recycled pool)
+ * ============================================================= */
+const SCENERY_COUNT = 20;
+const SCENERY_RANGE_NEAR =  10;
+const SCENERY_RANGE_FAR  = -180;
+
+function buildPalm() {
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.24, 4.4, 8),
+    new THREE.MeshLambertMaterial({ color: 0x7a4a22 }),
+  );
+  trunk.position.y = 2.2;
+  trunk.castShadow = true;
+  g.add(trunk);
+
+  const leafMat = new THREE.MeshLambertMaterial({ color: 0x2ea83a });
+  for (let i = 0; i < 7; i++) {
+    const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.6, 6), leafMat);
+    const a = (i / 7) * Math.PI * 2;
+    leaf.position.set(Math.cos(a) * 0.7, 4.4, Math.sin(a) * 0.7);
+    leaf.rotation.z = Math.cos(a) * 0.9 + Math.PI;
+    leaf.rotation.x = Math.sin(a) * 0.9;
+    leaf.castShadow = true;
+    g.add(leaf);
+  }
+  const top = new THREE.Mesh(
+    new THREE.SphereGeometry(0.45, 10, 10),
+    new THREE.MeshLambertMaterial({ color: 0x3a8a2a }),
+  );
+  top.position.y = 4.4;
+  g.add(top);
+
+  // coconuts
+  const coconutMat = new THREE.MeshLambertMaterial({ color: 0x3a2008 });
+  for (let i = 0; i < 3; i++) {
+    const c = new THREE.Mesh(new THREE.SphereGeometry(0.13, 6, 6), coconutMat);
+    const a = (i / 3) * Math.PI * 2;
+    c.position.set(Math.cos(a) * 0.25, 4.2, Math.sin(a) * 0.25);
+    g.add(c);
+  }
+  return g;
+}
+
+function buildLamp() {
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.07, 0.1, 4.6, 8),
+    new THREE.MeshLambertMaterial({ color: 0x2a2e36 }),
+  );
+  post.position.y = 2.3;
+  post.castShadow = true;
+  g.add(post);
+  const arm = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 0.08, 0.08),
+    new THREE.MeshLambertMaterial({ color: 0x2a2e36 }),
+  );
+  arm.position.set(0.5, 4.55, 0);
+  g.add(arm);
+  const lamp = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xfff2a8 }),
+  );
+  lamp.position.set(0.95, 4.45, 0);
+  g.add(lamp);
+  return g;
+}
+
+function buildBuilding() {
+  const g = new THREE.Group();
+  const w = 3 + Math.random() * 4;
+  const h = 6 + Math.random() * 9;
+  const d = 3 + Math.random() * 4;
+  const colorPool = [0xc8b8a0, 0xe0d4b8, 0xb8a890, 0x9bb6c8, 0xd0a888, 0xc4a87a];
+  const c = colorPool[Math.floor(Math.random() * colorPool.length)];
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshLambertMaterial({ color: c }),
+  );
+  body.position.y = h / 2;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+
+  // Roof block
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(w * 0.9, 0.4, d * 0.9),
+    new THREE.MeshLambertMaterial({ color: 0x4a4a4a }),
+  );
+  roof.position.y = h + 0.2;
+  g.add(roof);
+
+  // Window strip suggestion (a darker plane on facade facing road)
+  const winMat = new THREE.MeshLambertMaterial({ color: 0x3a4a6a, emissive: 0x223348, emissiveIntensity: 0.4 });
+  for (let row = 0; row < Math.floor(h / 1.6); row++) {
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.78, 0.6), winMat);
+    win.position.set(0, 1.0 + row * 1.6, d / 2 + 0.01);
+    g.add(win);
+  }
+  return g;
+}
+
+function buildBush() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0x2ea83a });
+  for (let i = 0; i < 4; i++) {
+    const b = new THREE.Mesh(new THREE.SphereGeometry(0.5 + Math.random() * 0.3, 8, 8), mat);
+    b.position.set((Math.random() - 0.5) * 0.6, 0.5, (Math.random() - 0.5) * 0.6);
+    b.castShadow = true;
+    g.add(b);
+  }
+  return g;
+}
+
+function spawnSceneryItem(side, z) {
+  const types = ['palm', 'lamp', 'building', 'bush'];
+  const w = Math.random();
+  const type = w < 0.4 ? 'palm' : w < 0.65 ? 'lamp' : w < 0.85 ? 'building' : 'bush';
+  let mesh;
+  if (type === 'palm') mesh = buildPalm();
+  else if (type === 'lamp') mesh = buildLamp();
+  else if (type === 'building') mesh = buildBuilding();
+  else mesh = buildBush();
+  const baseX = (ROAD_WIDTH / 2 + 4) + Math.random() * 12;
+  mesh.position.x = side === 'L' ? -baseX : baseX;
+  mesh.position.z = z;
+  scene.add(mesh);
+  scenery.push({ type, side, mesh });
+}
+
+// Pre-fill scenery on both sides
+for (let i = 0; i < SCENERY_COUNT; i++) {
+  const z = SCENERY_RANGE_NEAR - (i / SCENERY_COUNT) * (SCENERY_RANGE_NEAR - SCENERY_RANGE_FAR);
+  spawnSceneryItem(i % 2 === 0 ? 'L' : 'R', z);
+}
+
+/* =============================================================
+ * 7. Player — hierarchical mesh-bone group
+ * ============================================================= */
+const playerMats = {
+  jersey:   new THREE.MeshLambertMaterial({ color: 0xe74c3c }),
+  jersey2:  new THREE.MeshLambertMaterial({ color: 0xc8102e }),
+  shorts:   new THREE.MeshLambertMaterial({ color: 0x1a2330 }),
+  skin:     new THREE.MeshLambertMaterial({ color: 0xd49b6b }),
+  hair:     new THREE.MeshLambertMaterial({ color: 0x1a0e08 }),
+  headband: new THREE.MeshLambertMaterial({ color: 0xff8c3a }),
+  shoe:     new THREE.MeshLambertMaterial({ color: 0xffffff }),
+  shoeStripe: new THREE.MeshLambertMaterial({ color: 0xff8c3a }),
+  white:    new THREE.MeshLambertMaterial({ color: 0xffffff }),
+  black:    new THREE.MeshLambertMaterial({ color: 0x111111 }),
+  ball:     new THREE.MeshLambertMaterial({ color: 0xff8c3a }),
 };
 
-const ANIM = { lanechange: 0.22, slide: 0.85 };
-const JUMP_VY = -1080;
-const GRAVITY = 2950;
+function setMeshShadow(m) {
+  m.castShadow = true;
+  m.receiveShadow = false;
+}
 
-// === Spawning ===
-// difficulty rises with distance
+function buildPlayer() {
+  const root = new THREE.Group();
+  const bodyHolder = new THREE.Group();
+  root.add(bodyHolder);
+
+  // Torso (jersey)
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.05, 0.6), playerMats.jersey);
+  torso.position.y = 1.6;
+  setMeshShadow(torso);
+  bodyHolder.add(torso);
+
+  // Jersey trim (a thin lower band)
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(1.07, 0.08, 0.62), playerMats.white);
+  trim.position.y = 1.13;
+  bodyHolder.add(trim);
+
+  // Shorts
+  const shorts = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.55, 0.62), playerMats.shorts);
+  shorts.position.y = 0.85;
+  setMeshShadow(shorts);
+  bodyHolder.add(shorts);
+
+  // Neck
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.18, 10), playerMats.skin);
+  neck.position.y = 2.2;
+  setMeshShadow(neck);
+  bodyHolder.add(neck);
+
+  // Head group (so we can wobble)
+  const headGroup = new THREE.Group();
+  headGroup.position.y = 2.5;
+  bodyHolder.add(headGroup);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 16), playerMats.skin);
+  setMeshShadow(head);
+  headGroup.add(head);
+
+  // Hair (top hemisphere)
+  const hairGeom = new THREE.SphereGeometry(0.34, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+  const hair = new THREE.Mesh(hairGeom, playerMats.hair);
+  hair.position.y = 0.04;
+  headGroup.add(hair);
+
+  // Headband (torus)
+  const headband = new THREE.Mesh(
+    new THREE.TorusGeometry(0.32, 0.05, 8, 24),
+    playerMats.headband,
+  );
+  headband.rotation.x = Math.PI / 2;
+  headband.position.y = 0.05;
+  headGroup.add(headband);
+
+  // Eyes
+  const eyeMat = playerMats.white;
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), eyeMat);
+  eyeL.position.set(-0.11, 0.02, 0.27);
+  headGroup.add(eyeL);
+  const eyeR = eyeL.clone();
+  eyeR.position.x = 0.11;
+  headGroup.add(eyeR);
+
+  const pupL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), playerMats.black);
+  pupL.position.set(-0.11, 0.02, 0.32);
+  headGroup.add(pupL);
+  const pupR = pupL.clone();
+  pupR.position.x = 0.11;
+  headGroup.add(pupR);
+
+  // Arms — hierarchical
+  function buildArm(side) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(side * 0.62, 2.05, 0);
+
+    const upper = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.11, 0.55, 10),
+      playerMats.skin,
+    );
+    upper.position.y = -0.27;
+    setMeshShadow(upper);
+    shoulder.add(upper);
+
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.55;
+    shoulder.add(elbow);
+
+    const fore = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.11, 0.1, 0.5, 10),
+      playerMats.skin,
+    );
+    fore.position.y = -0.25;
+    setMeshShadow(fore);
+    elbow.add(fore);
+
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 10), playerMats.skin);
+    hand.position.y = -0.55;
+    setMeshShadow(hand);
+    elbow.add(hand);
+
+    return { shoulder, upper, elbow, fore, hand };
+  }
+  const armL = buildArm(-1);
+  const armR = buildArm(+1);
+  bodyHolder.add(armL.shoulder);
+  bodyHolder.add(armR.shoulder);
+
+  // Legs
+  function buildLeg(side) {
+    const hip = new THREE.Group();
+    hip.position.set(side * 0.27, 0.6, 0);
+
+    const upper = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.14, 0.6, 10),
+      playerMats.skin,
+    );
+    upper.position.y = -0.3;
+    setMeshShadow(upper);
+    hip.add(upper);
+
+    const knee = new THREE.Group();
+    knee.position.y = -0.6;
+    hip.add(knee);
+
+    const lower = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.13, 0.12, 0.5, 10),
+      playerMats.skin,
+    );
+    lower.position.y = -0.25;
+    setMeshShadow(lower);
+    knee.add(lower);
+
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.5), playerMats.shoe);
+    shoe.position.set(0, -0.55, 0.08);
+    setMeshShadow(shoe);
+    knee.add(shoe);
+
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.18), playerMats.shoeStripe);
+    stripe.position.set(0, -0.5, 0.0);
+    knee.add(stripe);
+
+    return { hip, upper, knee, lower, shoe, stripe };
+  }
+  const legL = buildLeg(-1);
+  const legR = buildLeg(+1);
+  bodyHolder.add(legL.hip);
+  bodyHolder.add(legR.hip);
+
+  // Basketball attached to right hand (its own group so we can hide/show)
+  const ballGroup = new THREE.Group();
+  ballGroup.position.set(0, -0.7, 0.05);
+  armR.elbow.add(ballGroup);
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 16), playerMats.ball);
+  setMeshShadow(ball);
+  ballGroup.add(ball);
+  // ball seam (a thin torus)
+  const seamMat = new THREE.MeshLambertMaterial({ color: 0x1a0a00 });
+  const seam = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.012, 6, 18), seamMat);
+  seam.rotation.x = Math.PI / 2;
+  ballGroup.add(seam);
+  const seam2 = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.012, 6, 18), seamMat);
+  ballGroup.add(seam2);
+
+  // Shield aura (hidden by default)
+  const auraGeo = new THREE.SphereGeometry(1.15, 24, 24);
+  const auraMat = new THREE.MeshBasicMaterial({
+    color: 0x6cd8ff,
+    transparent: true,
+    opacity: 0.32,
+    depthWrite: false,
+  });
+  const aura = new THREE.Mesh(auraGeo, auraMat);
+  aura.position.y = 1.3;
+  aura.visible = false;
+  bodyHolder.add(aura);
+
+  // Rocket pack (hidden by default)
+  const pack = new THREE.Group();
+  pack.position.set(0, 1.5, -0.36);
+  pack.visible = false;
+  const packBody = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.7, 0.35),
+    new THREE.MeshLambertMaterial({ color: 0x3a3f48 }),
+  );
+  pack.add(packBody);
+  const packNoseMat = new THREE.MeshLambertMaterial({ color: 0xff8c3a });
+  const nL = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.55, 8), packNoseMat);
+  nL.position.set(-0.18, 0, 0);
+  pack.add(nL);
+  const nR = nL.clone();
+  nR.position.x = 0.18;
+  pack.add(nR);
+  bodyHolder.add(pack);
+
+  return {
+    root, bodyHolder, torso, shorts, trim, neck, head, hair, headband,
+    armL, armR, legL, legR,
+    ballGroup, ball, seam, seam2,
+    aura, pack,
+  };
+}
+
+const playerObj = buildPlayer();
+playerObj.root.position.set(0, 0, 0);
+scene.add(playerObj.root);
+
+const player = {
+  lane: 1,                // integer target lane
+  visualLane: 1,          // float (smooth interp)
+  x: 0,                   // smoothed world x
+  y: 0,                   // jump height (>=0)
+  vy: 0,
+  state: 'run',           // run | crossover | slide | dunk | rocket
+  stateTimer: 0,
+  animTime: 0,
+  lean: 0,                // current z-rotation lean
+};
+
+function applySkin(skin) {
+  playerMats.jersey.color.set(skin.jersey1);
+  playerMats.shorts.color.set(skin.shorts);
+  playerMats.skin.color.set(skin.skinTone);
+  playerMats.hair.color.set(skin.hair);
+  playerMats.headband.color.set(skin.headband);
+  playerMats.shoeStripe.color.set(skin.shoeStripe);
+}
+applySkin(getSkin());
+
+/* =============================================================
+ * 8. Obstacles — defender, cone, hurdle, bin
+ * ============================================================= */
+function buildDefender() {
+  const g = new THREE.Group();
+  const blue = new THREE.MeshLambertMaterial({ color: 0x2a4ad8 });
+  const blueDark = new THREE.MeshLambertMaterial({ color: 0x102060 });
+  const skin = new THREE.MeshLambertMaterial({ color: 0x8a5a3a });
+  const dark = new THREE.MeshLambertMaterial({ color: 0x1a1010 });
+  const white = new THREE.MeshLambertMaterial({ color: 0xffffff });
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.0, 0.7), blue);
+  torso.position.y = 1.6;
+  setMeshShadow(torso);
+  g.add(torso);
+
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.07, 0.72), white);
+  trim.position.y = 1.12;
+  g.add(trim);
+
+  const shorts = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.55, 0.72), blueDark);
+  shorts.position.y = 0.83;
+  setMeshShadow(shorts);
+  g.add(shorts);
+
+  // Legs
+  const legGeo = new THREE.CylinderGeometry(0.16, 0.14, 0.6, 8);
+  const legL = new THREE.Mesh(legGeo, skin);
+  legL.position.set(-0.3, 0.3, 0);
+  setMeshShadow(legL);
+  g.add(legL);
+  const legR = legL.clone();
+  legR.position.x = 0.3;
+  g.add(legR);
+
+  // Shoes
+  const shoeGeo = new THREE.BoxGeometry(0.34, 0.16, 0.5);
+  const shoeL = new THREE.Mesh(shoeGeo, white);
+  shoeL.position.set(-0.3, 0.05, 0.08);
+  setMeshShadow(shoeL);
+  g.add(shoeL);
+  const shoeR = shoeL.clone();
+  shoeR.position.x = 0.3;
+  g.add(shoeR);
+
+  // Arms held out wide (challenger pose)
+  const armGeo = new THREE.CylinderGeometry(0.13, 0.11, 0.95, 8);
+  const armL = new THREE.Mesh(armGeo, skin);
+  armL.position.set(-0.95, 1.65, 0);
+  armL.rotation.z = Math.PI / 2.4;
+  setMeshShadow(armL);
+  g.add(armL);
+  const armR = armL.clone();
+  armR.position.x = 0.95;
+  armR.rotation.z = -Math.PI / 2.4;
+  g.add(armR);
+
+  // Hands
+  const hand = new THREE.SphereGeometry(0.13, 8, 8);
+  const hL = new THREE.Mesh(hand, skin);
+  hL.position.set(-1.45, 1.65, 0);
+  g.add(hL);
+  const hR = hL.clone();
+  hR.position.x = 1.45;
+  g.add(hR);
+
+  // Head
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 16), skin);
+  head.position.y = 2.45;
+  setMeshShadow(head);
+  g.add(head);
+
+  // Hair / cap
+  const cap = new THREE.Mesh(
+    new THREE.SphereGeometry(0.34, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    dark,
+  );
+  cap.position.y = 2.49;
+  g.add(cap);
+
+  return g;
+}
+
+function buildCone() {
+  const g = new THREE.Group();
+  const cone = new THREE.Mesh(
+    new THREE.ConeGeometry(0.45, 1.0, 16),
+    new THREE.MeshLambertMaterial({ color: 0xff7a1a }),
+  );
+  cone.position.y = 0.5;
+  setMeshShadow(cone);
+  g.add(cone);
+
+  const stripe = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.32, 0.36, 0.13, 16),
+    new THREE.MeshLambertMaterial({ color: 0xffffff }),
+  );
+  stripe.position.y = 0.42;
+  g.add(stripe);
+
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 0.06, 0.9),
+    new THREE.MeshLambertMaterial({ color: 0xc44a10 }),
+  );
+  base.position.y = 0.03;
+  setMeshShadow(base);
+  g.add(base);
+
+  return g;
+}
+
+function buildHurdle() {
+  const g = new THREE.Group();
+  const white = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const red   = new THREE.MeshLambertMaterial({ color: 0xc8102e });
+
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.0, 0.08), white);
+  legL.position.set(-0.9, 0.5, 0);
+  setMeshShadow(legL);
+  g.add(legL);
+  const legR = legL.clone();
+  legR.position.x = 0.9;
+  g.add(legR);
+
+  // Foot pads
+  const footGeo = new THREE.BoxGeometry(0.5, 0.06, 0.4);
+  const footMat = new THREE.MeshLambertMaterial({ color: 0xdadada });
+  const footL = new THREE.Mesh(footGeo, footMat);
+  footL.position.set(-0.9, 0.03, 0);
+  g.add(footL);
+  const footR = footL.clone();
+  footR.position.x = 0.9;
+  g.add(footR);
+
+  // Striped top beam (assemble out of segments)
+  const beamY = 1.0;
+  for (let i = 0; i < 6; i++) {
+    const seg = new THREE.Mesh(
+      new THREE.BoxGeometry(0.32, 0.18, 0.18),
+      i % 2 === 0 ? red : white,
+    );
+    seg.position.set(-0.8 + i * 0.32, beamY, 0);
+    setMeshShadow(seg);
+    g.add(seg);
+  }
+  // Reflector top
+  const refl = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.06, 0.06),
+    new THREE.MeshLambertMaterial({ color: 0xffd84a, emissive: 0x554400, emissiveIntensity: 0.4 }),
+  );
+  refl.position.set(0, beamY + 0.12, 0);
+  g.add(refl);
+
+  return g;
+}
+
+function buildBin() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.42, 0.5, 1.2, 16),
+    new THREE.MeshLambertMaterial({ color: 0x4a5260 }),
+  );
+  body.position.y = 0.6;
+  setMeshShadow(body);
+  g.add(body);
+
+  // Stripes
+  const stripeMatA = new THREE.MeshLambertMaterial({ color: 0x2a3340 });
+  for (let i = 0; i < 2; i++) {
+    const r = new THREE.Mesh(new THREE.CylinderGeometry(0.503, 0.503, 0.05, 16), stripeMatA);
+    r.position.y = 0.4 + i * 0.5;
+    g.add(r);
+  }
+
+  const lid = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.55, 0.55, 0.12, 16),
+    new THREE.MeshLambertMaterial({ color: 0x1a2330 }),
+  );
+  lid.position.y = 1.27;
+  setMeshShadow(lid);
+  g.add(lid);
+
+  // recycle dot
+  const dot = new THREE.Mesh(
+    new THREE.CircleGeometry(0.18, 16),
+    new THREE.MeshLambertMaterial({ color: 0x2ea83a, side: THREE.DoubleSide }),
+  );
+  dot.position.set(0, 0.85, 0.51);
+  g.add(dot);
+
+  return g;
+}
+
+/* =============================================================
+ * 9. Pickups — coin & power-up
+ * ============================================================= */
+const coinMat = new THREE.MeshLambertMaterial({
+  color: 0xffd84a,
+  emissive: 0x553300,
+  emissiveIntensity: 0.5,
+});
+const coinGeo = new THREE.TorusGeometry(0.28, 0.085, 10, 22);
+
+function buildCoin() {
+  const m = new THREE.Mesh(coinGeo, coinMat);
+  m.castShadow = true;
+  m.rotation.x = Math.PI / 2; // face forward
+  return m;
+}
+
+function powerupColorHex(kind) {
+  switch (kind) {
+    case 'magnet': return 0xff5050;
+    case 'multi':  return 0x4ed64e;
+    case 'shield': return 0x6cd8ff;
+    case 'rocket': return 0xff9a3a;
+  }
+  return 0xffffff;
+}
+
+function buildPowerup(kind) {
+  const g = new THREE.Group();
+  const innerColor = powerupColorHex(kind);
+  // Outer translucent shell
+  const shell = new THREE.Mesh(
+    new THREE.SphereGeometry(0.4, 16, 16),
+    new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.45,
+      emissive: innerColor,
+      emissiveIntensity: 0.2,
+    }),
+  );
+  shell.castShadow = true;
+  g.add(shell);
+
+  // Inner glowing core
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.24, 16, 16),
+    new THREE.MeshLambertMaterial({
+      color: innerColor,
+      emissive: innerColor,
+      emissiveIntensity: 0.95,
+    }),
+  );
+  g.add(core);
+
+  // Decorative ring
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.42, 0.04, 8, 24),
+    new THREE.MeshLambertMaterial({
+      color: innerColor,
+      emissive: innerColor,
+      emissiveIntensity: 0.6,
+    }),
+  );
+  ring.rotation.x = Math.PI / 2;
+  g.add(ring);
+
+  return g;
+}
+
+/* =============================================================
+ * 10. Particle system (manual mesh pool)
+ * ============================================================= */
+const PARTICLE_GEOM = new THREE.BoxGeometry(0.18, 0.18, 0.18);
+const partPool = [];
+const PARTICLE_POOL_MAX = 240;
+
+function spawnParticle(x, y, z, vx, vy, vz, life, color, gravity) {
+  let entry = particles.find((p) => !p.alive);
+  if (!entry) {
+    if (particles.length >= PARTICLE_POOL_MAX) return;
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, fog: false });
+    const m = new THREE.Mesh(PARTICLE_GEOM, mat);
+    scene.add(m);
+    entry = { mesh: m, mat, alive: false, vx: 0, vy: 0, vz: 0, life: 0, maxLife: 1, gravity: true };
+    particles.push(entry);
+  }
+  entry.alive = true;
+  entry.mesh.visible = true;
+  entry.mesh.position.set(x, y, z);
+  const s = 0.6 + Math.random() * 0.8;
+  entry.mesh.scale.set(s, s, s);
+  entry.mesh.rotation.set(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
+  entry.vx = vx;
+  entry.vy = vy;
+  entry.vz = vz;
+  entry.life = entry.maxLife = life;
+  entry.gravity = gravity !== false;
+  entry.mat.color.set(color);
+  entry.mat.opacity = 1;
+}
+
+function updateParticles(dt) {
+  for (const p of particles) {
+    if (!p.alive) continue;
+    p.life -= dt;
+    if (p.life <= 0) {
+      p.alive = false;
+      p.mesh.visible = false;
+      continue;
+    }
+    p.mesh.position.x += p.vx * dt;
+    p.mesh.position.y += p.vy * dt;
+    p.mesh.position.z += p.vz * dt;
+    if (p.gravity) p.vy -= 25 * dt;
+    p.mesh.rotation.x += dt * 4;
+    p.mesh.rotation.y += dt * 3;
+    p.mat.opacity = Math.max(0, p.life / p.maxLife);
+  }
+}
+
+/* =============================================================
+ * 11. Spawning (ported probabilities from 2D version)
+ * ============================================================= */
+const SPAWN_Z = -90;
+
 function difficulty() {
-  return Math.min(1, distance / 28000);
+  return Math.min(1, distance / 1500);
+}
+
+function pushObstacle(kind, lane, z) {
+  let mesh;
+  if (kind === 'defender') mesh = buildDefender();
+  else if (kind === 'cone') mesh = buildCone();
+  else if (kind === 'hurdle') mesh = buildHurdle();
+  else if (kind === 'bin') mesh = buildBin();
+  if (!mesh) return;
+  mesh.position.set(LANES_X[lane], 0, z);
+  scene.add(mesh);
+  obstacles.push({ kind, lane, mesh, processed: false, baseY: 0 });
+}
+
+function pushCoin(lane, z, yOff) {
+  const m = buildCoin();
+  m.position.set(LANES_X[lane], 1.0 + (yOff || 0), z);
+  scene.add(m);
+  collectibles.push({
+    kind: 'coin',
+    lane,
+    mesh: m,
+    z,
+    yOff: yOff || 0,
+    collected: false,
+    bobPhase: Math.random() * Math.PI * 2,
+    spinPhase: 0,
+    magLane: lane,
+  });
+}
+
+function pushPowerup(sub, lane, z) {
+  const m = buildPowerup(sub);
+  m.position.set(LANES_X[lane], 1.3, z);
+  scene.add(m);
+  collectibles.push({
+    kind: 'powerup',
+    sub,
+    lane,
+    mesh: m,
+    z,
+    collected: false,
+    bobPhase: Math.random() * Math.PI * 2,
+  });
 }
 
 function spawnPattern() {
-  if (power.rocket > 0) return; // no danger spawns during rocket
+  if (power.rocket > 0) return;
   const r = Math.random();
-  const d = 1700;
+  const z = SPAWN_Z;
   const diff = difficulty();
 
   // Coin row
   if (r < 0.30) {
     const lane = Math.floor(Math.random() * 3);
     const count = 5 + Math.floor(Math.random() * 4);
-    const pattern = Math.random();
+    const arc = Math.random() < 0.25;
     for (let i = 0; i < count; i++) {
-      let cy = 0;
-      if (pattern < 0.2) cy = -Math.sin((i / (count - 1)) * Math.PI) * 90; // arc up
-      collectibles.push({ kind: 'coin', lane, d: d + i * 70, yOff: cy });
+      const yOff = arc ? Math.sin((i / (count - 1)) * Math.PI) * 1.0 : 0;
+      pushCoin(lane, z - i * 1.6, yOff);
     }
     return;
   }
@@ -144,42 +999,37 @@ function spawnPattern() {
     if (diff > 0.4) kinds.push('rocket');
     const kind = kinds[Math.floor(Math.random() * kinds.length)];
     const lane = Math.floor(Math.random() * 3);
-    collectibles.push({ kind: 'powerup', sub: kind, lane, d });
+    pushPowerup(kind, lane, z);
     return;
   }
 
   // Single defender
   if (r < 0.50) {
-    obstacles.push({ kind: 'defender', lane: Math.floor(Math.random() * 3), d });
+    pushObstacle('defender', Math.floor(Math.random() * 3), z);
     return;
   }
-
   // Cone
   if (r < 0.62) {
-    obstacles.push({ kind: 'cone', lane: Math.floor(Math.random() * 3), d });
+    pushObstacle('cone', Math.floor(Math.random() * 3), z);
     return;
   }
-
-  // Hurdle (slide under) — single lane
+  // Hurdle (slide under)
   if (r < 0.72) {
-    obstacles.push({ kind: 'hurdle', lane: Math.floor(Math.random() * 3), d });
+    pushObstacle('hurdle', Math.floor(Math.random() * 3), z);
     return;
   }
-
-  // Trash bin (jump over OR change lane)
+  // Bin (jump or change lane)
   if (r < 0.80) {
-    obstacles.push({ kind: 'bin', lane: Math.floor(Math.random() * 3), d });
+    pushObstacle('bin', Math.floor(Math.random() * 3), z);
     return;
   }
-
   // Full-width hurdle (must slide)
   if (r < 0.86) {
-    obstacles.push({ kind: 'hurdle', lane: 0, d });
-    obstacles.push({ kind: 'hurdle', lane: 1, d });
-    obstacles.push({ kind: 'hurdle', lane: 2, d });
+    pushObstacle('hurdle', 0, z);
+    pushObstacle('hurdle', 1, z);
+    pushObstacle('hurdle', 2, z);
     return;
   }
-
   // Two-lane block: leaves one open lane
   if (r < 0.94) {
     const open = Math.floor(Math.random() * 3);
@@ -187,12 +1037,11 @@ function spawnPattern() {
     const kindB = Math.random() < 0.5 ? 'defender' : 'cone';
     for (let l = 0; l < 3; l++) {
       if (l === open) {
-        // sometimes drop coins in the open lane
         if (Math.random() < 0.6) {
-          for (let i = 0; i < 3; i++) collectibles.push({ kind: 'coin', lane: l, d: d - 60 + i * 70 });
+          for (let i = 0; i < 3; i++) pushCoin(l, z - 1 + i * 1.5, 0);
         }
       } else {
-        obstacles.push({ kind: l === 0 ? kindA : kindB, lane: l, d });
+        pushObstacle(l === 0 ? kindA : kindB, l, z);
       }
     }
     return;
@@ -200,84 +1049,182 @@ function spawnPattern() {
 
   // Defender + open lane coins
   const dl = Math.floor(Math.random() * 3);
-  obstacles.push({ kind: 'defender', lane: dl, d });
+  pushObstacle('defender', dl, z);
   let cl = (dl + 1) % 3;
   if (Math.random() < 0.5) cl = (dl + 2) % 3;
-  for (let i = 0; i < 4; i++) collectibles.push({ kind: 'coin', lane: cl, d: d - 80 + i * 70 });
+  for (let i = 0; i < 4; i++) pushCoin(cl, z - 1 + i * 1.4, 0);
 }
 
-// === Scenery (palm trees, lampposts, benches on side) ===
-function spawnScenery() {
-  const types = ['palm', 'lamp', 'bench', 'bush', 'sign'];
-  const type = types[Math.floor(Math.random() * types.length)];
-  const side = Math.random() < 0.5 ? 'L' : 'R';
-  scenery.push({ type, side, d: 1800, sway: Math.random() * Math.PI * 2 });
+/* =============================================================
+ * 12. Reset / start state
+ * ============================================================= */
+function clearWorld() {
+  for (const o of obstacles) scene.remove(o.mesh);
+  for (const c of collectibles) scene.remove(c.mesh);
+  obstacles.length = 0;
+  collectibles.length = 0;
+  for (const p of particles) {
+    p.alive = false;
+    p.mesh.visible = false;
+  }
 }
 
 function reset() {
+  clearWorld();
   player.lane = 1;
   player.visualLane = 1;
+  player.x = 0;
   player.y = 0;
   player.vy = 0;
   player.state = 'run';
   player.stateTimer = 0;
   player.animTime = 0;
-  player.trail = 0;
-  obstacles = [];
-  collectibles = [];
-  particles = [];
-  scenery = [];
-  speed = baseSpeed;
+  player.lean = 0;
+  speed = BASE_SPEED;
   distance = 0;
   runDistanceM = 0;
   score = 0;
   coins = 0;
   spawnTimer = 0.8;
-  power.magnet = 0;
-  power.multi = 0;
-  power.shield = 0;
-  power.rocket = 0;
-  // pre-fill scenery so it doesn't look empty at start
-  for (let i = 0; i < 8; i++) scenery.push({
-    type: ['palm','lamp','bush','bench','sign'][i % 5],
-    side: i % 2 === 0 ? 'L' : 'R',
-    d: 200 + i * 200,
-    sway: Math.random() * Math.PI * 2,
-  });
+  power.magnet = power.multi = power.shield = power.rocket = 0;
+
+  playerObj.bodyHolder.rotation.set(0, 0, 0);
+  playerObj.root.rotation.set(0, 0, 0);
+  playerObj.root.position.set(0, 0, 0);
+  playerObj.aura.visible = false;
+  playerObj.pack.visible = false;
 }
 
-// === Update ===
-function update(dt) {
-  // particles always update (death + ambient)
-  for (const p of particles) {
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    if (p.gravity !== false) p.vy += 1500 * dt;
-    p.life -= dt;
+/* =============================================================
+ * 13. Player animation
+ * ============================================================= */
+function setRotXSafe(grp, rx) { if (grp) grp.rotation.x = rx; }
+
+function animatePlayer(dt) {
+  const t = player.animTime * 11; // run cadence
+  const isAir = player.y > 0.1 || player.state === 'rocket';
+
+  // Default: arms hang
+  let armLx = 0, armRx = 0, elbowLx = 0, elbowRx = 0;
+  let legLx = 0, legRx = 0, kneeLx = 0, kneeRx = 0;
+  let bodyTilt = 0;
+
+  if (player.state === 'slide') {
+    // legs straight forward, body forward
+    legLx = -1.4; legRx = -1.4;
+    kneeLx = 0.3; kneeRx = 0.3;
+    armLx = -2.1; armRx = -2.1;
+    elbowLx = 0.4; elbowRx = 0.4;
+    playerObj.bodyHolder.rotation.x = -1.2;
+  } else if (player.state === 'rocket') {
+    legLx = -0.2; legRx = -0.2;
+    armLx = 0.3; armRx = 0.3;
+    elbowLx = 0; elbowRx = 0;
+    playerObj.bodyHolder.rotation.x = -0.4;
+  } else if (player.state === 'dunk' || isAir) {
+    // tuck legs, raise arms
+    const tuck = 0.9;
+    legLx = -tuck;
+    legRx = -tuck;
+    kneeLx = 1.4;
+    kneeRx = 1.4;
+    armLx = -2.4;
+    armRx = -2.6;
+    elbowLx = 0.3;
+    elbowRx = 0.3;
+    playerObj.bodyHolder.rotation.x = -0.15;
+  } else {
+    // running: legs swing opposite
+    const swing = Math.sin(t) * 0.95;
+    const armSwing = Math.sin(t) * 0.7;
+    legLx =  swing;
+    legRx = -swing;
+    // bend the back-swinging knee
+    kneeLx = Math.max(0, -swing) * 1.4;
+    kneeRx = Math.max(0,  swing) * 1.4;
+    armLx = -armSwing - 0.15;
+    armRx =  armSwing - 0.15;
+    elbowLx = 0.6 + Math.max(0,  armSwing) * 0.4;
+    elbowRx = 0.6 + Math.max(0, -armSwing) * 0.4;
+    bodyTilt = Math.abs(Math.sin(t)) * -0.04 - 0.05;
+    playerObj.bodyHolder.rotation.x = bodyTilt;
   }
-  particles = particles.filter((p) => p.life > 0);
+
+  // Apply
+  setRotXSafe(playerObj.legL.hip,  legLx);
+  setRotXSafe(playerObj.legR.hip,  legRx);
+  setRotXSafe(playerObj.legL.knee, kneeLx);
+  setRotXSafe(playerObj.legR.knee, kneeRx);
+  setRotXSafe(playerObj.armL.shoulder, armLx);
+  setRotXSafe(playerObj.armR.shoulder, armRx);
+  setRotXSafe(playerObj.armL.elbow, elbowLx);
+  setRotXSafe(playerObj.armR.elbow, elbowRx);
+
+  // Body bob (vertical only) for run
+  let bob = 0;
+  if (!isAir && player.state === 'run') {
+    bob = Math.abs(Math.sin(t * 2)) * 0.06;
+  }
+
+  // Lane lean (z rotation toward target lane)
+  const dxLane = player.lane - player.visualLane;
+  const targetLean = THREE.MathUtils.clamp(-dxLane * 0.35, -0.45, 0.45);
+  player.lean += (targetLean - player.lean) * Math.min(1, dt * 9);
+  playerObj.root.rotation.z = player.lean;
+
+  // Set vertical/y position with optional slide drop
+  const slideDrop = player.state === 'slide' ? -0.55 : 0;
+  // 0.65 is the baseline so that feet rest on the ground (y=0).
+  playerObj.root.position.y = 0.65 + player.y + bob + slideDrop;
+
+  // Smoothly move x to lane center
+  const targetX = LANES_X[player.lane];
+  player.visualLane += (player.lane - player.visualLane) * Math.min(1, dt * 14);
+  player.x += (targetX - player.x) * Math.min(1, dt * 14);
+  playerObj.root.position.x = player.x;
+
+  // Ball spin
+  playerObj.ball.rotation.x += dt * 9;
+  playerObj.ball.rotation.y += dt * 5;
+  playerObj.seam.rotation.z += dt * 4;
+  playerObj.seam2.rotation.x += dt * 4;
+
+  // Aura / pack visibility
+  playerObj.aura.visible = power.shield > 0;
+  if (playerObj.aura.visible) {
+    const s = 1 + Math.sin(player.animTime * 4) * 0.05;
+    playerObj.aura.scale.set(s, s, s);
+    playerObj.aura.material.opacity = 0.28 + Math.sin(player.animTime * 6) * 0.08;
+  }
+  playerObj.pack.visible = power.rocket > 0;
+}
+
+/* =============================================================
+ * 14. Update loop
+ * ============================================================= */
+function update(dt) {
+  // particles always update
+  updateParticles(dt);
 
   if (state !== STATE.PLAYING) return;
 
-  // Speed ramps with distance; rocket boosts
-  const targetSpeed = baseSpeed + Math.min(distance / 9000, 1) * 12 + (power.rocket > 0 ? 7 : 0);
-  speed += (targetSpeed - speed) * Math.min(1, dt * 3);
-  distance += speed;
-  runDistanceM = Math.floor(distance / 80);
+  // speed ramp + rocket boost
+  const targetSpeed = BASE_SPEED + difficulty() * (MAX_SPEED - BASE_SPEED) +
+    (power.rocket > 0 ? ROCKET_BOOST : 0);
+  speed += (targetSpeed - speed) * Math.min(1, dt * 2.5);
+  distance += speed * dt;
+  runDistanceM = Math.floor(distance);
   const scoreMult = power.multi > 0 ? 2 : 1;
-  score += speed * dt * 2.6 * scoreMult;
+  score += speed * dt * 1.2 * scoreMult;
 
-  // Power-up timers
+  // power-up timers
   if (power.magnet > 0) power.magnet -= dt;
-  if (power.multi > 0)  power.multi -= dt;
-  if (power.shield > 0) power.shield -= dt;
+  if (power.multi  > 0) power.multi  -= dt;
   if (power.rocket > 0) power.rocket -= dt;
+  // shield is persistent until used
   refreshPowerupHUD();
 
-  // Smooth lane interp
-  player.visualLane += (player.lane - player.visualLane) * Math.min(1, dt * 16);
-
-  // State timer
+  // state timer
   if (player.stateTimer > 0) {
     player.stateTimer -= dt;
     if (player.stateTimer <= 0 && player.state !== 'dunk' && player.state !== 'rocket') {
@@ -288,101 +1235,131 @@ function update(dt) {
   // Rocket: float in the air
   if (power.rocket > 0) {
     player.state = 'rocket';
-    const targetY = -210;
-    player.y += (targetY - player.y) * Math.min(1, dt * 6);
+    const targetY = 3.2;
+    player.y += (targetY - player.y) * Math.min(1, dt * 4);
     player.vy = 0;
     // exhaust particles
-    if (Math.random() < 0.6) {
-      const px = laneXAtVisual(player.visualLane, 0);
-      const py = projectY(0) + player.y + 20;
-      particles.push({
-        x: px + (Math.random() - 0.5) * 14,
-        y: py,
-        vx: (Math.random() - 0.5) * 60,
-        vy: 200 + Math.random() * 80,
-        life: 0.45, maxLife: 0.45,
-        color: Math.random() < 0.5 ? '#ffb066' : '#ffd84a',
-        size: 5,
-        gravity: false,
-      });
+    if (Math.random() < 0.7) {
+      const px = player.x + (Math.random() - 0.5) * 0.4;
+      const py = playerObj.root.position.y + 1.4;
+      const pz = playerObj.root.position.z - 0.4;
+      spawnParticle(
+        px, py, pz,
+        (Math.random() - 0.5) * 1.0,
+        -2 - Math.random() * 1.5,
+        2 + Math.random() * 1.5,
+        0.5,
+        Math.random() < 0.5 ? '#ffb066' : '#ffd84a',
+        false,
+      );
     }
   } else if (player.state === 'rocket') {
     // landing after rocket
     player.state = 'dunk';
-    player.vy = -300;
+    player.vy = -2.0;
   }
 
   // Jump physics
   if (player.state === 'dunk') {
-    player.y += player.vy * dt;
-    player.vy += GRAVITY * dt;
-    if (player.y >= 0) {
+    player.vy -= GRAVITY * dt;
+    player.y  += player.vy * dt;
+    if (player.y <= 0) {
       player.y = 0;
       player.vy = 0;
       player.state = 'run';
-      const lx = laneXAtVisual(player.visualLane, 0);
-      const ly = projectY(0);
-      for (let i = 0; i < 12; i++) {
-        particles.push({
-          x: lx + (Math.random() - 0.5) * 36,
-          y: ly,
-          vx: (Math.random() - 0.5) * 280,
-          vy: -Math.random() * 140,
-          life: 0.45, maxLife: 0.45,
-          color: '#d9b58a', size: 4,
-        });
+      // dust burst on landing
+      const px = player.x;
+      const py = 0.05;
+      const pz = playerObj.root.position.z;
+      for (let i = 0; i < 10; i++) {
+        spawnParticle(
+          px, py, pz,
+          (Math.random() - 0.5) * 4,
+          0.5 + Math.random() * 2,
+          (Math.random() - 0.5) * 3,
+          0.45,
+          '#d9b58a',
+          true,
+        );
       }
     }
   }
 
-  // Move world toward player
-  for (const o of obstacles) o.d -= speed;
-  for (const c of collectibles) c.d -= speed;
-  for (const s of scenery) s.d -= speed * 0.95;
+  // Move world toward camera (positive z)
+  const dz = speed * dt;
+  for (const o of obstacles) o.mesh.position.z += dz;
+  for (const c of collectibles) c.mesh.position.z += dz;
 
-  // Magnet: pull coins toward player (when within range)
+  // Scenery scroll + recycle
+  for (const s of scenery) {
+    s.mesh.position.z += dz * 0.95;
+    if (s.mesh.position.z > 18) {
+      // recycle to far end
+      s.mesh.position.z -= 200 + Math.random() * 30;
+      // re-randomize x slightly
+      const baseX = (ROAD_WIDTH / 2 + 4) + Math.random() * 12;
+      s.mesh.position.x = s.side === 'L' ? -baseX : baseX;
+    }
+  }
+
+  // Lane stripes recycle
+  for (const m of stripes) {
+    m.position.z += dz;
+    if (m.position.z > 12) {
+      m.position.z -= STRIPE_TOTAL * STRIPE_COUNT;
+    }
+  }
+
+  // Magnet: pull coins toward player lane
   if (power.magnet > 0) {
     for (const c of collectibles) {
-      if (c.collected) continue;
-      if (c.kind !== 'coin') continue;
-      if (c.d > 600 || c.d < -50) continue;
-      // bend lane toward player's lane
-      const targetLane = player.lane;
-      c._mLane = c._mLane !== undefined ? c._mLane : c.lane;
-      c._mLane += (targetLane - c._mLane) * Math.min(1, dt * 6);
-      c.lane = c._mLane;
+      if (c.collected || c.kind !== 'coin') continue;
+      if (c.mesh.position.z < -25 || c.mesh.position.z > 4) continue;
+      const tx = LANES_X[player.lane];
+      c.mesh.position.x += (tx - c.mesh.position.x) * Math.min(1, dt * 6);
       // pull forward
-      if (c.d > 60) c.d -= 600 * dt;
+      if (c.mesh.position.z < -1.5) c.mesh.position.z += 12 * dt;
+    }
+  }
+
+  // Coin / pickup spin + bob
+  for (const c of collectibles) {
+    if (c.collected) continue;
+    c.bobPhase += dt * 3;
+    if (c.kind === 'coin') {
+      c.mesh.rotation.y += dt * 5;
+      c.mesh.position.y = 1.0 + (c.yOff || 0) + Math.sin(c.bobPhase) * 0.18;
+    } else {
+      c.mesh.rotation.y += dt * 1.6;
+      c.mesh.position.y = 1.3 + Math.sin(c.bobPhase) * 0.18;
     }
   }
 
   // Obstacle collision
   for (const o of obstacles) {
     if (o.processed) continue;
-    if (o.d <= 0) {
+    const z = o.mesh.position.z;
+    if (z >= -0.6 && z <= 1.5) {
       o.processed = true;
-      // Rocket flies over everything
       if (power.rocket > 0) continue;
-      const inLane = Math.round(player.visualLane) === o.lane;
-      if (!inLane) continue;
-      const evaded =
-        ((o.kind === 'cone' || o.kind === 'bin') && player.state === 'dunk' && player.y < -50) ||
-        (o.kind === 'hurdle' && player.state === 'slide') ||
-        (o.kind === 'defender' && player.state === 'dunk' && player.y < -100);
+      if (o.lane !== Math.round(player.visualLane)) continue;
+      const evaded = isObstacleEvaded(o);
       if (!evaded) {
         if (power.shield > 0) {
           power.shield = 0;
           // shield-pop effect
-          const px = laneXAtVisual(player.visualLane, 0);
-          const py = projectY(0) - 90;
-          for (let i = 0; i < 26; i++) {
-            const a = (i / 26) * Math.PI * 2;
-            particles.push({
-              x: px, y: py,
-              vx: Math.cos(a) * 280, vy: Math.sin(a) * 280,
-              life: 0.55, maxLife: 0.55,
-              color: '#a8e0ff', size: 4, gravity: false,
-            });
+          const px = player.x, py = 1.4, pz = 0;
+          for (let i = 0; i < 22; i++) {
+            const a = (i / 22) * Math.PI * 2;
+            spawnParticle(
+              px, py, pz,
+              Math.cos(a) * 6,
+              0.5 + Math.random() * 1,
+              Math.sin(a) * 6,
+              0.6,
+              '#a8e0ff',
+              false,
+            );
           }
           continue;
         }
@@ -392,91 +1369,141 @@ function update(dt) {
     }
   }
 
-  // Collectibles
+  // Collectibles collection
   for (const c of collectibles) {
     if (c.collected) continue;
-    if (c.d > 50 || c.d < -50) continue;
-    const sameLane = Math.round(player.visualLane) === Math.round(c.lane);
-    const reachable =
-      sameLane &&
-      (c.kind === 'coin' ? true : true);
-    if (!reachable) continue;
-
-    // For coins floating up arc, check vertical reach
+    const z = c.mesh.position.z;
+    if (z < -0.7 || z > 1.0) continue;
+    const sameLane = Math.abs(c.mesh.position.x - player.x) < 1.4;
+    if (!sameLane) continue;
+    // height check: coin at ~1m, player jumps reach >2.5; auto-collect on lane in z range
     if (c.kind === 'coin') {
+      // crude height window: must not be too high above player
+      const maxY = playerObj.root.position.y + 2.6;
+      if (c.mesh.position.y > maxY) continue;
       c.collected = true;
       coins += 1;
       totalCoins += 1;
       score += 10 * (power.multi > 0 ? 2 : 1);
-      const cx = laneXAtVisual(c.lane, 0);
-      const cy = projectY(0) - 60 + (c.yOff || 0);
-      for (let i = 0; i < 4; i++) {
-        particles.push({
-          x: cx, y: cy,
-          vx: (Math.random() - 0.5) * 160,
-          vy: -Math.random() * 160 - 30,
-          life: 0.45, maxLife: 0.45,
-          color: i % 2 === 0 ? '#ffd84a' : '#fff5b0', size: 4,
-        });
+      // sparkle
+      const cx = c.mesh.position.x, cy = c.mesh.position.y, cz = c.mesh.position.z;
+      for (let i = 0; i < 5; i++) {
+        spawnParticle(
+          cx, cy, cz,
+          (Math.random() - 0.5) * 4,
+          1 + Math.random() * 2,
+          (Math.random() - 0.5) * 4,
+          0.45,
+          i % 2 === 0 ? '#ffd84a' : '#fff5b0',
+          true,
+        );
       }
       coinCountEl.textContent = coins;
     } else if (c.kind === 'powerup') {
       c.collected = true;
       activatePowerup(c.sub);
-      const cx = laneXAtVisual(c.lane, 0);
-      const cy = projectY(0) - 80;
+      const cx = c.mesh.position.x, cy = c.mesh.position.y, cz = c.mesh.position.z;
       for (let i = 0; i < 22; i++) {
         const a = (i / 22) * Math.PI * 2;
-        particles.push({
-          x: cx, y: cy,
-          vx: Math.cos(a) * 240, vy: Math.sin(a) * 240,
-          life: 0.6, maxLife: 0.6,
-          color: powerupColor(c.sub), size: 4, gravity: false,
-        });
+        spawnParticle(
+          cx, cy, cz,
+          Math.cos(a) * 6,
+          0.5 + Math.random() * 2,
+          Math.sin(a) * 6,
+          0.55,
+          powerupColorString(c.sub),
+          false,
+        );
       }
     }
   }
 
   // Cleanup
-  obstacles = obstacles.filter((o) => o.d > -200);
-  collectibles = collectibles.filter((c) => c.d > -200 && !c.collected);
-  scenery = scenery.filter((s) => s.d > -100);
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    if (o.mesh.position.z > 12) {
+      scene.remove(o.mesh);
+      obstacles.splice(i, 1);
+    }
+  }
+  for (let i = collectibles.length - 1; i >= 0; i--) {
+    const c = collectibles[i];
+    if (c.collected || c.mesh.position.z > 12) {
+      scene.remove(c.mesh);
+      collectibles.splice(i, 1);
+    }
+  }
 
-  // Spawn timing
+  // Spawn timing — distance-based gap so it scales with speed
   spawnTimer -= dt;
   if (spawnTimer <= 0) {
     spawnPattern();
-    spawnTimer = 0.85 - Math.min(distance / 30000, 0.45);
+    spawnTimer = 0.85 - Math.min(distance / 4000, 0.45);
   }
-  if (Math.random() < 0.04) spawnScenery();
 
   player.animTime += dt;
 
   // HUD
   scoreEl.textContent = Math.floor(score);
+
+  // Camera follow
+  const camTargetX = player.x * 0.35;
+  camera.position.x += (camTargetX - camera.position.x) * Math.min(1, dt * 4);
+  camera.position.y = 4.4;
+  camera.position.z = 8.5;
+  camera.lookAt(player.x * 0.5, 1.3, -6);
+
+  // Sun follow (so shadow stays under player)
+  sun.position.x = player.x + 18;
+  sun.target.position.set(player.x, 0, 0);
+  sun.target.updateMatrixWorld();
+
+  animatePlayer(dt);
 }
 
-function powerupColor(kind) {
+function isObstacleEvaded(o) {
+  if (o.kind === 'cone') {
+    return player.state === 'dunk' && player.y > 0.55;
+  }
+  if (o.kind === 'bin') {
+    return player.state === 'dunk' && player.y > 1.05;
+  }
+  if (o.kind === 'defender') {
+    return player.state === 'dunk' && player.y > 1.4;
+  }
+  if (o.kind === 'hurdle') {
+    return player.state === 'slide';
+  }
+  return false;
+}
+
+function powerupColorString(kind) {
   switch (kind) {
-    case 'magnet': return '#ff5a5a';
-    case 'multi':  return '#6adf6a';
+    case 'magnet': return '#ff5050';
+    case 'multi':  return '#4ed64e';
     case 'shield': return '#a8e0ff';
     case 'rocket': return '#ffb066';
   }
-  return '#fff';
+  return '#ffffff';
 }
 
 function activatePowerup(kind) {
   switch (kind) {
     case 'magnet': power.magnet = 8; break;
     case 'multi':  power.multi  = 10; break;
-    case 'shield': power.shield = 999; break; // until used
-    case 'rocket': power.rocket = 5; player.state = 'rocket'; break;
+    case 'shield': power.shield = 999; break;
+    case 'rocket':
+      power.rocket = 5;
+      player.state = 'rocket';
+      player.vy = 0;
+      break;
   }
   refreshPowerupHUD();
 }
 
-// === Input ===
+/* =============================================================
+ * 15. Input
+ * ============================================================= */
 function setLane(targetLane) {
   if (state !== STATE.PLAYING) return;
   targetLane = Math.max(0, Math.min(2, targetLane));
@@ -484,7 +1511,7 @@ function setLane(targetLane) {
   player.lane = targetLane;
   if (player.state === 'slide' || player.state === 'dunk' || player.state === 'rocket') return;
   player.state = 'crossover';
-  player.stateTimer = ANIM.lanechange;
+  player.stateTimer = LANE_CHANGE_TIME;
 }
 
 function swipeLeft()  { setLane(player.lane - 1); }
@@ -494,18 +1521,16 @@ function swipeUp() {
   if (player.state === 'dunk' || player.state === 'rocket') return;
   player.state = 'dunk';
   player.vy = JUMP_VY;
-  player.y = -1;
+  player.y = 0.01;
   player.stateTimer = 0;
 }
 function swipeDown() {
   if (state !== STATE.PLAYING) return;
   if (player.state === 'dunk' || player.state === 'rocket') return;
-  // air-slam from jump?
   player.state = 'slide';
-  player.stateTimer = ANIM.slide;
+  player.stateTimer = SLIDE_TIME;
 }
 
-// Touch swipe
 let touchStart = null;
 canvas.addEventListener('touchstart', (e) => {
   if (state !== STATE.PLAYING) return;
@@ -536,928 +1561,33 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   switch (e.key) {
-    case 'ArrowLeft':  case 'a': case 'A': swipeLeft(); break;
+    case 'ArrowLeft':  case 'a': case 'A': swipeLeft();  break;
     case 'ArrowRight': case 'd': case 'D': swipeRight(); break;
-    case 'ArrowUp':    case 'w': case 'W': swipeUp(); break;
-    case 'ArrowDown':  case 's': case 'S': swipeDown(); break;
+    case 'ArrowUp':    case 'w': case 'W': swipeUp();    break;
+    case 'ArrowDown':  case 's': case 'S': swipeDown();  break;
   }
 });
 
-// === Render: background (sky, sun, clouds, hills, skyline) ===
-let cloudOffset = 0;
-let bgScrollX = 0;
-
-function drawBackground(dt) {
-  const vy = vanishY();
-
-  // Sky gradient (day)
-  const sky = ctx.createLinearGradient(0, 0, 0, vy);
-  sky.addColorStop(0, '#5dbcff');
-  sky.addColorStop(0.6, '#a8dcff');
-  sky.addColorStop(1, '#ffe3b0');
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, W, vy);
-
-  // Sun
-  const sunX = W * 0.78;
-  const sunY = vy * 0.45;
-  const sunR = Math.min(W, H) * 0.07;
-  const sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunR * 3);
-  sunGrad.addColorStop(0, 'rgba(255, 250, 220, 0.9)');
-  sunGrad.addColorStop(0.4, 'rgba(255, 220, 150, 0.5)');
-  sunGrad.addColorStop(1, 'rgba(255, 220, 150, 0)');
-  ctx.fillStyle = sunGrad;
-  ctx.beginPath();
-  ctx.arc(sunX, sunY, sunR * 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#fffbe0';
-  ctx.beginPath();
-  ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Clouds (parallax)
-  cloudOffset += dt * 6;
-  drawCloud((W * 0.15 - (cloudOffset * 0.4) % (W + 200) + W) % (W + 200) - 100, vy * 0.30, 1.0);
-  drawCloud((W * 0.55 - (cloudOffset * 0.3) % (W + 220) + W) % (W + 220) - 110, vy * 0.20, 0.7);
-  drawCloud((W * 0.85 - (cloudOffset * 0.5) % (W + 200) + W) % (W + 200) - 100, vy * 0.45, 0.85);
-  drawCloud((W * 0.30 - (cloudOffset * 0.25) % (W + 240) + W) % (W + 240) - 120, vy * 0.55, 0.6);
-
-  // Distant skyline
-  drawSkyline(vy);
-
-  // Distant hills
-  drawHills(vy);
-}
-
-function drawCloud(x, y, scale) {
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-  ctx.beginPath();
-  ctx.arc(x, y, 22 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 24 * scale, y - 6 * scale, 26 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 50 * scale, y, 22 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 30 * scale, y + 8 * scale, 20 * scale, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawSkyline(vy) {
-  const baseY = vy - 4;
-  ctx.fillStyle = '#9bb6c8';
-  const offset = (distance * 0.05) % 100;
-  for (let i = -1; i < Math.ceil(W / 36) + 1; i++) {
-    const bx = i * 36 - offset;
-    const seed = ((i * 3.7) % 1 + 1) % 1;
-    const bh = 18 + seed * 36;
-    ctx.fillRect(bx, baseY - bh, 32, bh);
-    // windows
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    for (let wY = baseY - bh + 6; wY < baseY - 6; wY += 7) {
-      for (let wX = bx + 4; wX < bx + 28; wX += 8) {
-        ctx.fillRect(wX, wY, 3, 3);
-      }
-    }
-    ctx.fillStyle = '#9bb6c8';
-  }
-}
-
-function drawHills(vy) {
-  ctx.fillStyle = '#7ab47a';
-  ctx.beginPath();
-  ctx.moveTo(0, vy);
-  const offset = (distance * 0.08) % 200;
-  for (let i = -1; i < Math.ceil(W / 100) + 1; i++) {
-    const x = i * 100 - offset;
-    ctx.quadraticCurveTo(x + 50, vy - 22, x + 100, vy);
-  }
-  ctx.lineTo(W, vy + 12);
-  ctx.lineTo(0, vy + 12);
-  ctx.closePath();
-  ctx.fill();
-}
-
-// === Render: road (3 lanes) ===
-function drawRoad() {
-  const vy = vanishY();
-  const gy = groundY();
-
-  // Grass / sidewalk on sides
-  ctx.fillStyle = '#7ab47a';
-  ctx.fillRect(0, vy, W, H - vy);
-
-  // Sidewalk lighter strip near road edge
-  // Build the road polygon
-  const roadL_top = streetEdgeXAt('L', 1700);
-  const roadR_top = streetEdgeXAt('R', 1700);
-  const roadL_bot = streetEdgeXAt('L', 0);
-  const roadR_bot = streetEdgeXAt('R', 0);
-
-  // Sidewalk band (between road edge and grass)
-  ctx.fillStyle = '#cfcfcf';
-  ctx.beginPath();
-  ctx.moveTo(0, gy);
-  ctx.lineTo(roadL_bot - 24, gy);
-  ctx.lineTo(roadL_top - 6, vy);
-  ctx.lineTo(0, vy);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(W, gy);
-  ctx.lineTo(roadR_bot + 24, gy);
-  ctx.lineTo(roadR_top + 6, vy);
-  ctx.lineTo(W, vy);
-  ctx.closePath();
-  ctx.fill();
-
-  // Road (asphalt)
-  const road = ctx.createLinearGradient(0, vy, 0, gy);
-  road.addColorStop(0, '#3a3f48');
-  road.addColorStop(1, '#5a606a');
-  ctx.fillStyle = road;
-  ctx.beginPath();
-  ctx.moveTo(roadL_top, vy);
-  ctx.lineTo(roadR_top, vy);
-  ctx.lineTo(roadR_bot, H);
-  ctx.lineTo(roadL_bot, H);
-  ctx.closePath();
-  ctx.fill();
-
-  // Curb line
-  ctx.strokeStyle = '#1f2228';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(roadL_top, vy);
-  ctx.lineTo(roadL_bot, H);
-  ctx.moveTo(roadR_top, vy);
-  ctx.lineTo(roadR_bot, H);
-  ctx.stroke();
-
-  // Lane dividers (dashed white)
-  ctx.strokeStyle = '#fff7d0';
-  ctx.lineWidth = 3;
-  // dashed motion
-  const spacing = 110;
-  const offset = ((distance % spacing) + spacing) % spacing;
-
-  // Two divider lines: between lane 0/1 and 1/2
-  for (const dividerLane of [0.5, 1.5]) {
-    const baseTop = (LANE_BASE_X[Math.floor(dividerLane)] +
-                    (LANE_BASE_X[Math.ceil(dividerLane)] - LANE_BASE_X[Math.floor(dividerLane)]) *
-                    (dividerLane - Math.floor(dividerLane))) * W;
-    for (let i = -1; i < 22; i++) {
-      const dStart = i * spacing - offset;
-      const dEnd   = dStart + spacing * 0.55;
-      if (dEnd < 0 || dStart > 1700) continue;
-      const sStart = Math.max(0, dStart);
-      const sEnd   = Math.min(1700, dEnd);
-      const yA = projectY(sStart);
-      const yB = projectY(sEnd);
-      const sA = getScale(sStart);
-      const sB = getScale(sEnd);
-      const xA = W / 2 + (baseTop - W / 2) * sA;
-      const xB = W / 2 + (baseTop - W / 2) * sB;
-      ctx.lineWidth = Math.max(1.5, 4 * sB);
-      ctx.beginPath();
-      ctx.moveTo(xA, yA);
-      ctx.lineTo(xB, yB);
-      ctx.stroke();
-    }
-  }
-}
-
-// === Render: scenery (palm trees, lampposts, signs, benches, bushes) ===
-function drawScenery() {
-  // Sort by depth
-  const sorted = [...scenery].sort((a, b) => b.d - a.d);
-  for (const s of sorted) {
-    if (s.d > 1700 || s.d < -100) continue;
-    const scale = getScale(s.d);
-    const y = projectY(s.d);
-    const baseX = (s.side === 'L' ? 0.10 : 0.90) * W;
-    const x = W / 2 + (baseX - W / 2) * scale;
-    if (s.type === 'palm') drawPalm(x, y, scale, s.sway + s.d * 0.001);
-    else if (s.type === 'lamp') drawLamp(x, y, scale);
-    else if (s.type === 'bench') drawBench(x, y, scale);
-    else if (s.type === 'bush') drawBush(x, y, scale);
-    else if (s.type === 'sign') drawSign(x, y, scale);
-  }
-}
-
-function drawPalm(x, y, scale, sway) {
-  // Trunk
-  ctx.fillStyle = '#7a4a22';
-  ctx.fillRect(x - 6 * scale, y - 110 * scale, 12 * scale, 110 * scale);
-  // Trunk rings
-  ctx.fillStyle = '#5a3520';
-  for (let i = 0; i < 5; i++) {
-    ctx.fillRect(x - 6 * scale, y - 110 * scale + i * 22 * scale, 12 * scale, 2 * scale);
-  }
-  // Leaves
-  const swayX = Math.sin(sway) * 6 * scale;
-  ctx.fillStyle = '#2ea83a';
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2 + sway * 0.2;
-    const lx = x + Math.cos(a) * 36 * scale + swayX;
-    const ly = y - 110 * scale + Math.sin(a) * 18 * scale - 10 * scale;
-    ctx.beginPath();
-    ctx.ellipse(lx, ly, 28 * scale, 10 * scale, a, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Leaf highlight
-  ctx.fillStyle = '#4ec84a';
-  ctx.beginPath();
-  ctx.arc(x + swayX, y - 116 * scale, 10 * scale, 0, Math.PI * 2);
-  ctx.fill();
-  // Coconuts
-  ctx.fillStyle = '#3a2008';
-  ctx.beginPath();
-  ctx.arc(x - 5 * scale + swayX, y - 110 * scale + 4 * scale, 4 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 6 * scale + swayX, y - 110 * scale + 6 * scale, 4 * scale, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawLamp(x, y, scale) {
-  ctx.fillStyle = '#3a3f48';
-  ctx.fillRect(x - 3 * scale, y - 130 * scale, 6 * scale, 130 * scale);
-  ctx.fillRect(x - 3 * scale, y - 130 * scale, 30 * scale, 4 * scale);
-  // Light bulb
-  ctx.fillStyle = '#fff5b0';
-  ctx.beginPath();
-  ctx.arc(x + 26 * scale, y - 124 * scale, 8 * scale, 0, Math.PI * 2);
-  ctx.fill();
-  // Glow
-  const grad = ctx.createRadialGradient(x + 26 * scale, y - 124 * scale, 0, x + 26 * scale, y - 124 * scale, 28 * scale);
-  grad.addColorStop(0, 'rgba(255, 245, 176, 0.5)');
-  grad.addColorStop(1, 'rgba(255, 245, 176, 0)');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(x + 26 * scale, y - 124 * scale, 28 * scale, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawBench(x, y, scale) {
-  ctx.fillStyle = '#7a4a22';
-  ctx.fillRect(x - 30 * scale, y - 24 * scale, 60 * scale, 6 * scale);
-  ctx.fillRect(x - 30 * scale, y - 38 * scale, 60 * scale, 6 * scale);
-  ctx.fillStyle = '#3a3f48';
-  ctx.fillRect(x - 28 * scale, y - 18 * scale, 4 * scale, 18 * scale);
-  ctx.fillRect(x + 24 * scale, y - 18 * scale, 4 * scale, 18 * scale);
-}
-
-function drawBush(x, y, scale) {
-  ctx.fillStyle = '#2ea83a';
-  ctx.beginPath();
-  ctx.arc(x - 10 * scale, y - 10 * scale, 14 * scale, 0, Math.PI * 2);
-  ctx.arc(x + 8 * scale,  y - 12 * scale, 16 * scale, 0, Math.PI * 2);
-  ctx.arc(x,              y - 18 * scale, 14 * scale, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#4ec84a';
-  ctx.beginPath();
-  ctx.arc(x - 4 * scale, y - 22 * scale, 6 * scale, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawSign(x, y, scale) {
-  ctx.fillStyle = '#5a3520';
-  ctx.fillRect(x - 2 * scale, y - 60 * scale, 4 * scale, 60 * scale);
-  ctx.fillStyle = '#ff8c3a';
-  ctx.fillRect(x - 26 * scale, y - 80 * scale, 52 * scale, 26 * scale);
-  ctx.fillStyle = '#1a2330';
-  ctx.fillRect(x - 26 * scale, y - 80 * scale, 52 * scale, 4 * scale);
-  ctx.fillStyle = '#fff';
-  ctx.font = `900 ${12 * scale}px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('HOOPS', x, y - 67 * scale);
-}
-
-// === Basketball ===
-function drawBasketball(x, y, r, rot) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rot);
-  const grad = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.2, 0, 0, r);
-  grad.addColorStop(0, '#ffae6b');
-  grad.addColorStop(1, '#c44a10');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#1a0a00';
-  ctx.lineWidth = Math.max(1, r * 0.1);
-  ctx.beginPath();
-  ctx.moveTo(-r, 0); ctx.lineTo(r, 0);
-  ctx.moveTo(0, -r); ctx.lineTo(0, r);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(0, 0, r, -Math.PI * 0.62, -Math.PI * 0.38);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(0, 0, r, Math.PI * 0.38, Math.PI * 0.62);
-  ctx.stroke();
-  ctx.restore();
-}
-
-// === Obstacles ===
-function drawObstacle(o) {
-  const d = o.d;
-  if (d > 1700) return;
-  const scale = getScale(d);
-  const y = projectY(d);
-  const x = laneXAt(o.lane, d);
-  if (o.kind === 'defender') drawDefender(x, y, scale);
-  else if (o.kind === 'cone') drawCone(x, y, scale);
-  else if (o.kind === 'hurdle') drawHurdle(x, y, scale);
-  else if (o.kind === 'bin') drawBin(x, y, scale);
-}
-
-function drawDefender(x, y, scale) {
-  const h = 200 * scale;
-  const w = 56 * scale;
-  // Shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.beginPath();
-  ctx.ellipse(x, y + 2, w * 0.7, w * 0.22, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Legs
-  ctx.fillStyle = '#1a3a8a';
-  ctx.fillRect(x - w * 0.4, y - h * 0.45, w * 0.3, h * 0.2);
-  ctx.fillRect(x + w * 0.1, y - h * 0.45, w * 0.3, h * 0.2);
-  ctx.fillStyle = '#5a3520';
-  ctx.fillRect(x - w * 0.36, y - h * 0.25, w * 0.22, h * 0.22);
-  ctx.fillRect(x + w * 0.14, y - h * 0.25, w * 0.22, h * 0.22);
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(x - w * 0.42, y - 4 * scale, w * 0.32, 8 * scale);
-  ctx.fillRect(x + w * 0.1,  y - 4 * scale, w * 0.32, 8 * scale);
-  // Jersey
-  const jg = ctx.createLinearGradient(0, y - h, 0, y - h * 0.45);
-  jg.addColorStop(0, '#3a76e8');
-  jg.addColorStop(1, '#1a3a8a');
-  ctx.fillStyle = jg;
-  ctx.beginPath();
-  ctx.moveTo(x - w * 0.5, y - h * 0.45);
-  ctx.lineTo(x + w * 0.5, y - h * 0.45);
-  ctx.lineTo(x + w * 0.45, y - h * 0.78);
-  ctx.lineTo(x - w * 0.45, y - h * 0.78);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.font = `900 ${22 * scale}px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('D', x, y - h * 0.6);
-  // Arms
-  ctx.fillStyle = '#5a3520';
-  ctx.fillRect(x - w * 1.05, y - h * 0.78, w * 0.3, w * 0.22);
-  ctx.fillRect(x + w * 0.75, y - h * 0.78, w * 0.3, w * 0.22);
-  ctx.beginPath();
-  ctx.arc(x - w * 1.1, y - h * 0.78 + w * 0.11, w * 0.18, 0, Math.PI * 2);
-  ctx.arc(x + w * 1.1, y - h * 0.78 + w * 0.11, w * 0.18, 0, Math.PI * 2);
-  ctx.fill();
-  // Head
-  ctx.beginPath();
-  ctx.arc(x, y - h * 0.88, w * 0.32, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#1a0e08';
-  ctx.beginPath();
-  ctx.arc(x, y - h * 0.92, w * 0.32, Math.PI, 0);
-  ctx.fill();
-}
-
-function drawCone(x, y, scale) {
-  const h = 56 * scale;
-  const w = 40 * scale;
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.beginPath();
-  ctx.ellipse(x, y + 2, w * 0.65, w * 0.22, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#c44a10';
-  ctx.fillRect(x - w * 0.6, y - 4 * scale, w * 1.2, 6 * scale);
-  const cg = ctx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
-  cg.addColorStop(0, '#c44a10');
-  cg.addColorStop(0.5, '#ff8c3a');
-  cg.addColorStop(1, '#c44a10');
-  ctx.fillStyle = cg;
-  ctx.beginPath();
-  ctx.moveTo(x, y - h);
-  ctx.lineTo(x + w / 2, y - 2 * scale);
-  ctx.lineTo(x - w / 2, y - 2 * scale);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.moveTo(x - w * 0.3, y - h * 0.5);
-  ctx.lineTo(x + w * 0.3, y - h * 0.5);
-  ctx.lineTo(x + w * 0.36, y - h * 0.38);
-  ctx.lineTo(x - w * 0.36, y - h * 0.38);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawHurdle(x, y, scale) {
-  const w = 72 * scale;
-  const h = 70 * scale;
-  // Shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.beginPath();
-  ctx.ellipse(x, y + 2, w * 0.6, w * 0.18, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Legs
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(x - w * 0.5, y - h, 4 * scale, h);
-  ctx.fillRect(x + w * 0.5 - 4 * scale, y - h, 4 * scale, h);
-  // Cross beam (red+white striped)
-  const beamY = y - h * 0.85;
-  const beamH = 14 * scale;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(x - w * 0.55, beamY, w * 1.1, beamH);
-  ctx.fillStyle = '#c8102e';
-  for (let i = 0; i < 4; i++) {
-    ctx.fillRect(x - w * 0.55 + i * (w * 0.275), beamY, w * 0.135, beamH);
-  }
-  // Top reflector
-  ctx.fillStyle = '#ffd84a';
-  ctx.fillRect(x - 4 * scale, beamY - 4 * scale, 8 * scale, 4 * scale);
-}
-
-function drawBin(x, y, scale) {
-  const w = 42 * scale;
-  const h = 70 * scale;
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.beginPath();
-  ctx.ellipse(x, y + 2, w * 0.6, w * 0.2, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Body
-  const bg = ctx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
-  bg.addColorStop(0, '#3a3f48');
-  bg.addColorStop(0.5, '#6a707a');
-  bg.addColorStop(1, '#3a3f48');
-  ctx.fillStyle = bg;
-  ctx.fillRect(x - w / 2, y - h, w, h);
-  // Lid
-  ctx.fillStyle = '#1a2330';
-  ctx.fillRect(x - w / 2 - 3 * scale, y - h - 5 * scale, w + 6 * scale, 6 * scale);
-  // Stripes
-  ctx.fillStyle = '#1a2330';
-  ctx.fillRect(x - w / 2, y - h * 0.5, w, 3 * scale);
-  ctx.fillRect(x - w / 2, y - h * 0.2, w, 3 * scale);
-  // Recycle symbol
-  ctx.fillStyle = '#2ea83a';
-  ctx.beginPath();
-  ctx.arc(x, y - h * 0.6, w * 0.25, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.font = `900 ${10 * scale}px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('R', x, y - h * 0.6);
-}
-
-// === Collectibles ===
-function drawCollectible(c) {
-  const d = c.d;
-  if (d > 1700) return;
-  const scale = getScale(d);
-  const x = laneXAtVisual(typeof c.lane === 'number' ? c.lane : 1, d);
-  const bob = Math.sin((distance + d) * 0.012) * 6 * scale;
-  const baseY = projectY(d) - 60 * scale + (c.yOff || 0) * scale + bob;
-
-  if (c.kind === 'coin') {
-    drawCoin(x, baseY, 14 * scale, distance * 0.06);
-  } else if (c.kind === 'powerup') {
-    drawPowerup(x, baseY, 22 * scale, c.sub);
-  }
-}
-
-function drawCoin(x, y, r, spin) {
-  // Spinning ellipse to suggest rotation
-  const w = Math.abs(Math.cos(spin)) * r;
-  // Outer rim
-  ctx.fillStyle = '#8a6e10';
-  ctx.beginPath();
-  ctx.ellipse(x, y, w + 1.5, r + 1.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Face gradient
-  const grad = ctx.createRadialGradient(x - w * 0.3, y - r * 0.3, 0, x, y, r);
-  grad.addColorStop(0, '#fff5b0');
-  grad.addColorStop(0.6, '#ffd84a');
-  grad.addColorStop(1, '#c8a022');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.ellipse(x, y, w, r, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // $ symbol — drawn in local space and squashed with the coin spin
-  if (w > 4) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(Math.cos(spin), 1);
-    ctx.fillStyle = '#8a6e10';
-    ctx.font = `900 ${r * 1.2}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('$', 0, 0);
-    ctx.restore();
-  }
-  // Sparkle
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.beginPath();
-  ctx.ellipse(x - w * 0.4, y - r * 0.4, w * 0.2, r * 0.2, 0, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawPowerup(x, y, r, kind) {
-  // Outer pulsing glow
-  const pulse = 1 + Math.sin(distance * 0.02) * 0.15;
-  const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 2.4 * pulse);
-  glow.addColorStop(0, powerupColor(kind) + 'cc');
-  glow.addColorStop(1, powerupColor(kind) + '00');
-  ctx.fillStyle = glow;
-  ctx.beginPath();
-  ctx.arc(x, y, r * 2.4 * pulse, 0, Math.PI * 2);
-  ctx.fill();
-  // Capsule
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = powerupColor(kind);
-  ctx.beginPath();
-  ctx.arc(x, y, r * 0.78, 0, Math.PI * 2);
-  ctx.fill();
-  // Icon
-  ctx.fillStyle = '#fff';
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = r * 0.18;
-  ctx.lineCap = 'round';
-  if (kind === 'magnet') {
-    // U shape
-    ctx.beginPath();
-    ctx.arc(x, y + r * 0.1, r * 0.5, Math.PI, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillRect(x - r * 0.6, y + r * 0.05, r * 0.25, r * 0.45);
-    ctx.fillRect(x + r * 0.35, y + r * 0.05, r * 0.25, r * 0.45);
-  } else if (kind === 'multi') {
-    ctx.font = `900 ${r * 1.0}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('×2', x, y);
-  } else if (kind === 'shield') {
-    ctx.beginPath();
-    ctx.moveTo(x, y - r * 0.55);
-    ctx.lineTo(x + r * 0.45, y - r * 0.3);
-    ctx.lineTo(x + r * 0.4, y + r * 0.3);
-    ctx.lineTo(x, y + r * 0.55);
-    ctx.lineTo(x - r * 0.4, y + r * 0.3);
-    ctx.lineTo(x - r * 0.45, y - r * 0.3);
-    ctx.closePath();
-    ctx.fill();
-  } else if (kind === 'rocket') {
-    ctx.beginPath();
-    ctx.moveTo(x, y - r * 0.55);
-    ctx.lineTo(x + r * 0.3, y);
-    ctx.lineTo(x + r * 0.18, y + r * 0.4);
-    ctx.lineTo(x - r * 0.18, y + r * 0.4);
-    ctx.lineTo(x - r * 0.3, y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#ffd06b';
-    ctx.beginPath();
-    ctx.moveTo(x, y + r * 0.7);
-    ctx.lineTo(x + r * 0.18, y + r * 0.4);
-    ctx.lineTo(x - r * 0.18, y + r * 0.4);
-    ctx.closePath();
-    ctx.fill();
-  }
-}
-
-// === Player ===
-function drawPlayer(skinOverride, customX, customY) {
-  const skin = skinOverride || getSkin();
-  const x = customX !== undefined ? customX : laneXAtVisual(player.visualLane, 0);
-  const groundYpos = customY !== undefined ? customY : projectY(0);
-  const baseY = groundYpos + (customY !== undefined ? 0 : player.y);
-
-  // Shadow
-  if (customY === undefined) {
-    const airFactor = Math.max(0, Math.min(1, -player.y / 220));
-    const shadowAlpha = 0.4 * (1 - airFactor * 0.7);
-    const shadowScale = 1 - airFactor * 0.45;
-    ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
-    ctx.beginPath();
-    ctx.ellipse(x, groundYpos + 6, 50 * shadowScale, 13 * shadowScale, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Trail when running fast
-  if (customY === undefined && player.state !== 'rocket' && speed > 14) {
-    player.trail = (player.trail || 0) + 1;
-    if (player.trail % 3 === 0) {
-      particles.push({
-        x: x + (Math.random() - 0.5) * 18,
-        y: groundYpos - 4,
-        vx: -speed * 4,
-        vy: -Math.random() * 30,
-        life: 0.35, maxLife: 0.35,
-        color: 'rgba(255, 255, 255, 0.5)', size: 3,
-        gravity: false,
-      });
-    }
-  }
-
-  // Shield aura
-  if (customY === undefined && power.shield > 0) {
-    const t = distance * 0.02;
-    ctx.strokeStyle = 'rgba(168, 224, 255, 0.7)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.ellipse(x, baseY - 80, 50 + Math.sin(t) * 4, 100 + Math.cos(t) * 4, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(168, 224, 255, 0.3)';
-    ctx.lineWidth = 7;
-    ctx.beginPath();
-    ctx.ellipse(x, baseY - 80, 54 + Math.sin(t) * 4, 104 + Math.cos(t) * 4, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  // Multi aura
-  if (customY === undefined && power.multi > 0) {
-    const t = distance * 0.04;
-    ctx.fillStyle = `rgba(106, 223, 106, ${0.25 + Math.sin(t) * 0.1})`;
-    ctx.beginPath();
-    ctx.ellipse(x, baseY - 80, 46, 96, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Animation params
-  let lean = 0;
-  let isSlide = false;
-  let armPose = 'dribble';
-
-  if (customY === undefined) {
-    if (player.state === 'crossover') {
-      const t = 1 - player.stateTimer / ANIM.lanechange;
-      // lean toward direction of new lane (slight tilt)
-      const dir = player.lane - player.visualLane;
-      lean = Math.sin(t * Math.PI) * 0.35 * Math.sign(dir || 1);
-      armPose = 'cross';
-    } else if (player.state === 'slide') {
-      isSlide = true;
-      armPose = 'forward';
-    } else if (player.state === 'dunk') {
-      armPose = 'dunk';
-    } else if (player.state === 'rocket') {
-      armPose = 'rocket';
-    }
-  }
-
-  ctx.save();
-  ctx.translate(x, baseY);
-  ctx.rotate(lean);
-
-  const runT = (customY === undefined ? player.animTime : 0) * 14;
-  const isRunningPose = !isSlide && player.state !== 'dunk' && player.state !== 'rocket';
-  const legSwing = isRunningPose ? Math.sin(runT) * 14 : 0;
-  const bodyBob  = isRunningPose ? -Math.abs(Math.sin(runT * 2)) * 4 : 0;
-  ctx.translate(0, bodyBob);
-
-  if (isSlide) {
-    ctx.scale(1.35, 0.45);
-  }
-  if (player.state === 'rocket') {
-    // ride angled
-    ctx.rotate(-0.15);
-  }
-
-  drawPlayerBody(skin, legSwing, runT, armPose);
-
-  ctx.restore();
-}
-
-function drawPlayerBody(skin, legSwing, runT, armPose) {
-  // Shorts
-  ctx.fillStyle = skin.shorts;
-  ctx.beginPath();
-  ctx.moveTo(-24, -78);
-  ctx.lineTo(24, -78);
-  ctx.lineTo(30, -46);
-  ctx.lineTo(-30, -46);
-  ctx.closePath();
-  ctx.fill();
-  // Shorts trim
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(-30, -50, 60, 3);
-
-  // Legs (skin tone)
-  ctx.strokeStyle = skin.skinTone;
-  ctx.lineWidth = 13;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-12, -46);
-  ctx.lineTo(-12 + legSwing * 0.3, -22);
-  ctx.lineTo(-15 + legSwing, -2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(12, -46);
-  ctx.lineTo(12 - legSwing * 0.3, -22);
-  ctx.lineTo(15 - legSwing, -2);
-  ctx.stroke();
-
-  // Sneakers
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.ellipse(-15 + legSwing, 0, 15, 7, 0, 0, Math.PI * 2);
-  ctx.ellipse(15 - legSwing, 0, 15, 7, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = skin.shoeStripe;
-  ctx.fillRect(-23 + legSwing, -3, 16, 3);
-  ctx.fillRect(7 - legSwing, -3, 16, 3);
-
-  // Torso (jersey)
-  const jersey = ctx.createLinearGradient(0, -135, 0, -78);
-  jersey.addColorStop(0, skin.jersey1);
-  jersey.addColorStop(1, skin.jersey2);
-  ctx.fillStyle = jersey;
-  ctx.beginPath();
-  ctx.moveTo(-26, -135);
-  ctx.lineTo(26, -135);
-  ctx.lineTo(30, -78);
-  ctx.lineTo(-30, -78);
-  ctx.closePath();
-  ctx.fill();
-  // Jersey trim
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(-30, -82, 60, 3);
-  // Number
-  ctx.fillStyle = '#fff';
-  ctx.font = '900 22px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(skin.number, 0, -106);
-
-  // Neck
-  ctx.fillStyle = skin.skinTone;
-  ctx.fillRect(-7, -145, 14, 12);
-
-  // Head
-  ctx.beginPath();
-  ctx.arc(0, -160, 18, 0, Math.PI * 2);
-  ctx.fill();
-  // Hair
-  ctx.fillStyle = skin.hair;
-  ctx.beginPath();
-  ctx.arc(0, -165, 18, Math.PI, 0);
-  ctx.fill();
-  // Headband
-  ctx.fillStyle = skin.headband;
-  ctx.fillRect(-19, -167, 38, 5);
-  // Eyes
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(-9, -160, 5, 4);
-  ctx.fillRect(4, -160, 5, 4);
-  ctx.fillStyle = '#1a0a00';
-  ctx.fillRect(-7, -160, 3, 4);
-  ctx.fillRect(5, -160, 3, 4);
-  // Smile (subtle)
-  ctx.strokeStyle = '#3a1a08';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(0, -152, 4, 0, Math.PI);
-  ctx.stroke();
-
-  // Arms + ball
-  ctx.strokeStyle = skin.skinTone;
-  ctx.lineWidth = 12;
-  ctx.lineCap = 'round';
-  drawArmsAndBall(armPose, runT, legSwing);
-}
-
-function drawArmsAndBall(armPose, runT, legSwing) {
-  if (armPose === 'dribble') {
-    const dribbleY = -10 + Math.abs(Math.sin(runT * 2)) * 28;
-    ctx.beginPath();
-    ctx.moveTo(22, -130);
-    ctx.lineTo(32, -90);
-    ctx.lineTo(40, -50);
-    ctx.stroke();
-    drawBasketball(42, dribbleY, 13, runT);
-    ctx.beginPath();
-    ctx.moveTo(-22, -130);
-    ctx.lineTo(-28 - legSwing * 0.5, -95);
-    ctx.lineTo(-34 - legSwing, -68);
-    ctx.stroke();
-  } else if (armPose === 'cross') {
-    const t = 1 - player.stateTimer / ANIM.lanechange;
-    const k = Math.sin(t * Math.PI);
-    const ballX = -18 - 30 * k;
-    const ballY = -28 + 12 * k;
-    ctx.beginPath();
-    ctx.moveTo(-22, -130);
-    ctx.lineTo(-30, -90);
-    ctx.lineTo(ballX + 5, ballY - 10);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(22, -130);
-    ctx.lineTo(34, -100);
-    ctx.lineTo(44, -82);
-    ctx.stroke();
-    drawBasketball(ballX, ballY, 13, t * 5);
-    // Speed lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 3;
-    for (let i = 0; i < 3; i++) {
-      ctx.beginPath();
-      ctx.moveTo(-50 - i * 8, -60 - i * 4);
-      ctx.lineTo(-30 - i * 8, -60 - i * 4);
-      ctx.stroke();
-    }
-  } else if (armPose === 'forward') {
-    ctx.beginPath();
-    ctx.moveTo(22, -130);
-    ctx.lineTo(45, -115);
-    ctx.lineTo(60, -105);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-22, -130);
-    ctx.lineTo(-45, -115);
-    ctx.lineTo(-60, -105);
-    ctx.stroke();
-    drawBasketball(0, -100, 13, player.animTime * 6);
-  } else if (armPose === 'dunk') {
-    ctx.beginPath();
-    ctx.moveTo(15, -130);
-    ctx.lineTo(22, -170);
-    ctx.lineTo(18, -210);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-15, -130);
-    ctx.lineTo(-32, -112);
-    ctx.lineTo(-44, -96);
-    ctx.stroke();
-    drawBasketball(18, -224, 15, player.animTime * 8);
-  } else if (armPose === 'rocket') {
-    // Rocket strapped to back, arms forward
-    ctx.beginPath();
-    ctx.moveTo(22, -130);
-    ctx.lineTo(36, -120);
-    ctx.lineTo(50, -110);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-22, -130);
-    ctx.lineTo(-36, -120);
-    ctx.lineTo(-50, -110);
-    ctx.stroke();
-    // Rocket pack
-    ctx.fillStyle = '#3a3f48';
-    ctx.fillRect(-14, -118, 28, 30);
-    ctx.fillStyle = '#ff8c3a';
-    ctx.fillRect(-10, -100, 8, 12);
-    ctx.fillRect(2, -100, 8, 12);
-    // Ball tucked
-    drawBasketball(0, -100, 11, player.animTime * 4);
-  }
-}
-
-// === Particles ===
-function drawParticles() {
-  for (const p of particles) {
-    const a = Math.max(0, p.life / p.maxLife);
-    ctx.globalAlpha = a;
-    ctx.fillStyle = p.color || '#ffffff';
-    const s = p.size || 3;
-    ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
-  }
-  ctx.globalAlpha = 1;
-}
-
-// === Render frame ===
+/* =============================================================
+ * 16. Render loop
+ * ============================================================= */
 let lastT = performance.now();
-function render(dt) {
-  ctx.clearRect(0, 0, W, H);
-  drawBackground(dt);
-  drawRoad();
-  drawScenery();
-
-  // Sort obstacles + collectibles by depth
-  const all = [];
-  for (const o of obstacles) all.push({ kind: 'o', d: o.d, ref: o });
-  for (const c of collectibles) all.push({ kind: 'c', d: c.d, ref: c });
-  all.sort((a, b) => b.d - a.d);
-  for (const e of all) {
-    if (e.d < -50) continue;
-    if (e.kind === 'o') drawObstacle(e.ref);
-    else if (!e.ref.collected) drawCollectible(e.ref);
-  }
-
-  if (state === STATE.PLAYING || state === STATE.PAUSED || state === STATE.OVER) drawPlayer();
-  drawParticles();
-}
-
 function loop(now) {
   const dt = Math.min(0.033, (now - lastT) / 1000);
   lastT = now;
-  if (state === STATE.PLAYING) update(dt);
-  render(dt);
+  update(dt);
+  // animate menu player too (so the menu doesn't look frozen)
+  if (state !== STATE.PLAYING) {
+    player.animTime += dt;
+    animatePlayer(dt);
+  }
+  renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
 
-// === Pause / Resume / Quit ===
+/* =============================================================
+ * 17. Pause / quit
+ * ============================================================= */
 function pauseGame() {
   if (state !== STATE.PLAYING) return;
   state = STATE.PAUSED;
@@ -1475,24 +1605,26 @@ function quitToMenu() {
   showMenu('main');
 }
 
-// === UI hookup ===
-const menuEl = document.getElementById('menu');
-const skinsEl = document.getElementById('skins');
-const howtoEl = document.getElementById('howto');
-const pauseEl = document.getElementById('pause');
+/* =============================================================
+ * 18. UI hookup (preserved from original)
+ * ============================================================= */
+const menuEl     = document.getElementById('menu');
+const skinsEl    = document.getElementById('skins');
+const howtoEl    = document.getElementById('howto');
+const pauseEl    = document.getElementById('pause');
 const gameOverEl = document.getElementById('gameover');
-const hudEl = document.getElementById('hud');
-const scoreEl = document.getElementById('score');
-const coinCountEl = document.getElementById('coin-count');
-const finalScoreEl = document.getElementById('final-score-val');
-const highScoreEl = document.getElementById('high-score-val');
-const runCoinsEl = document.getElementById('run-coins-val');
-const runDistEl = document.getElementById('run-dist-val');
-const menuBestEl = document.getElementById('menu-best');
-const menuCoinsEl = document.getElementById('menu-coins');
-const skinsCoinsEl = document.getElementById('skins-coin-count');
-const skinGridEl = document.getElementById('skin-grid');
-const powerupsEl = document.getElementById('powerups');
+const hudEl      = document.getElementById('hud');
+const scoreEl       = document.getElementById('score');
+const coinCountEl   = document.getElementById('coin-count');
+const finalScoreEl  = document.getElementById('final-score-val');
+const highScoreEl   = document.getElementById('high-score-val');
+const runCoinsEl    = document.getElementById('run-coins-val');
+const runDistEl     = document.getElementById('run-dist-val');
+const menuBestEl    = document.getElementById('menu-best');
+const menuCoinsEl   = document.getElementById('menu-coins');
+const skinsCoinsEl  = document.getElementById('skins-coin-count');
+const skinGridEl    = document.getElementById('skin-grid');
+const powerupsEl    = document.getElementById('powerups');
 
 document.getElementById('play-btn').addEventListener('click', startGame);
 document.getElementById('retry-btn').addEventListener('click', startGame);
@@ -1515,7 +1647,7 @@ function showMenu(view) {
   skinsEl.classList.toggle('hidden', view !== 'skins');
   howtoEl.classList.toggle('hidden', view !== 'howto');
   if (view === 'main') {
-    menuBestEl.textContent = highScore;
+    menuBestEl.textContent  = highScore;
     menuCoinsEl.textContent = totalCoins;
   }
   if (view === 'skins') {
@@ -1531,6 +1663,7 @@ function renderSkinGrid() {
     const isEquipped = currentSkinId === s.id;
     const card = document.createElement('div');
     card.className = 'skin-card' + (isEquipped ? ' selected' : '') + (!isUnlocked ? ' locked' : '');
+
     const previewCanvas = document.createElement('canvas');
     previewCanvas.className = 'skin-preview';
     previewCanvas.width = 140;
@@ -1561,19 +1694,20 @@ function renderSkinGrid() {
       if (isEquipped) return;
       if (isUnlocked) {
         currentSkinId = s.id;
+        applySkin(s);
         saveProgress();
         renderSkinGrid();
       } else if (totalCoins >= s.cost) {
         totalCoins -= s.cost;
         unlockedSkins.push(s.id);
         currentSkinId = s.id;
+        applySkin(s);
         saveProgress();
         renderSkinGrid();
       } else {
-        // Flash insufficient coins
         skinsCoinsEl.parentElement.animate(
           [{ transform: 'translateX(-6px)' }, { transform: 'translateX(6px)' }, { transform: 'translateX(0)' }],
-          { duration: 250 }
+          { duration: 250 },
         );
       }
     });
@@ -1581,37 +1715,30 @@ function renderSkinGrid() {
   }
 }
 
+/* 2D-canvas skin preview (kept from the original game) */
 function drawSkinPreview(canvas, skin) {
   const c = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   c.clearRect(0, 0, w, h);
-  // Backdrop
   const bg = c.createLinearGradient(0, 0, 0, h);
   bg.addColorStop(0, '#a8dcff');
   bg.addColorStop(1, '#fff5d0');
   c.fillStyle = bg;
   c.fillRect(0, 0, w, h);
-  // Floor
   c.fillStyle = '#5a606a';
   c.fillRect(0, h * 0.78, w, h * 0.22);
-  // Center & scale
   c.save();
   c.translate(w / 2, h * 0.86);
   c.scale(0.6, 0.6);
-
-  // Body draw
   drawPreviewBody(c, skin);
-
   c.restore();
 }
 
 function drawPreviewBody(c, skin) {
-  // Shadow
   c.fillStyle = 'rgba(0,0,0,0.2)';
   c.beginPath();
   c.ellipse(0, 6, 50, 12, 0, 0, Math.PI * 2);
   c.fill();
-  // Shorts
   c.fillStyle = skin.shorts;
   c.beginPath();
   c.moveTo(-24, -78); c.lineTo(24, -78); c.lineTo(30, -46); c.lineTo(-30, -46);
@@ -1619,29 +1746,31 @@ function drawPreviewBody(c, skin) {
   c.fill();
   c.fillStyle = '#fff';
   c.fillRect(-30, -50, 60, 3);
-  // Legs
   c.strokeStyle = skin.skinTone;
   c.lineWidth = 13; c.lineCap = 'round';
   c.beginPath(); c.moveTo(-12, -46); c.lineTo(-15, -2); c.stroke();
   c.beginPath(); c.moveTo(12, -46); c.lineTo(15, -2); c.stroke();
   c.fillStyle = '#fff';
-  c.beginPath(); c.ellipse(-15, 0, 15, 7, 0, 0, Math.PI * 2); c.ellipse(15, 0, 15, 7, 0, 0, Math.PI * 2); c.fill();
+  c.beginPath();
+  c.ellipse(-15, 0, 15, 7, 0, 0, Math.PI * 2);
+  c.ellipse(15, 0, 15, 7, 0, 0, Math.PI * 2);
+  c.fill();
   c.fillStyle = skin.shoeStripe;
   c.fillRect(-23, -3, 16, 3); c.fillRect(7, -3, 16, 3);
-  // Jersey
   const jg = c.createLinearGradient(0, -135, 0, -78);
   jg.addColorStop(0, skin.jersey1); jg.addColorStop(1, skin.jersey2);
   c.fillStyle = jg;
-  c.beginPath(); c.moveTo(-26, -135); c.lineTo(26, -135); c.lineTo(30, -78); c.lineTo(-30, -78); c.closePath(); c.fill();
+  c.beginPath();
+  c.moveTo(-26, -135); c.lineTo(26, -135); c.lineTo(30, -78); c.lineTo(-30, -78);
+  c.closePath();
+  c.fill();
   c.fillStyle = '#fff';
   c.fillRect(-30, -82, 60, 3);
   c.font = '900 22px sans-serif';
   c.textAlign = 'center'; c.textBaseline = 'middle';
   c.fillText(skin.number, 0, -106);
-  // Neck
   c.fillStyle = skin.skinTone;
   c.fillRect(-7, -145, 14, 12);
-  // Head
   c.beginPath(); c.arc(0, -160, 18, 0, Math.PI * 2); c.fill();
   c.fillStyle = skin.hair;
   c.beginPath(); c.arc(0, -165, 18, Math.PI, 0); c.fill();
@@ -1653,16 +1782,14 @@ function drawPreviewBody(c, skin) {
   c.fillRect(-7, -160, 3, 4); c.fillRect(5, -160, 3, 4);
   c.strokeStyle = '#3a1a08'; c.lineWidth = 1.5;
   c.beginPath(); c.arc(0, -152, 4, 0, Math.PI); c.stroke();
-  // Arms holding ball at hip
   c.strokeStyle = skin.skinTone;
   c.lineWidth = 12; c.lineCap = 'round';
   c.beginPath(); c.moveTo(22, -130); c.lineTo(40, -100); c.lineTo(34, -70); c.stroke();
   c.beginPath(); c.moveTo(-22, -130); c.lineTo(-40, -100); c.lineTo(-34, -70); c.stroke();
-  // Ball
   c.save(); c.translate(34, -70);
-  const bg = c.createRadialGradient(-4, -4, 2, 0, 0, 14);
-  bg.addColorStop(0, '#ffae6b'); bg.addColorStop(1, '#c44a10');
-  c.fillStyle = bg;
+  const bg2 = c.createRadialGradient(-4, -4, 2, 0, 0, 14);
+  bg2.addColorStop(0, '#ffae6b'); bg2.addColorStop(1, '#c44a10');
+  c.fillStyle = bg2;
   c.beginPath(); c.arc(0, 0, 14, 0, Math.PI * 2); c.fill();
   c.strokeStyle = '#1a0a00'; c.lineWidth = 1.5;
   c.beginPath(); c.moveTo(-14, 0); c.lineTo(14, 0); c.moveTo(0, -14); c.lineTo(0, 14); c.stroke();
@@ -1673,7 +1800,7 @@ function refreshPowerupHUD() {
   if (!powerupsEl) return;
   const items = [];
   if (power.magnet > 0) items.push({ key: 'magnet', label: 'MAGNET', t: power.magnet });
-  if (power.multi > 0)  items.push({ key: 'multi',  label: '×2',     t: power.multi });
+  if (power.multi  > 0) items.push({ key: 'multi',  label: '×2',     t: power.multi  });
   if (power.shield > 0) items.push({ key: 'shield', label: 'SHIELD', t: 0 });
   if (power.rocket > 0) items.push({ key: 'rocket', label: 'ROCKET', t: power.rocket });
   powerupsEl.innerHTML = '';
@@ -1690,6 +1817,9 @@ function refreshPowerupHUD() {
   }
 }
 
+/* =============================================================
+ * 19. Game lifecycle
+ * ============================================================= */
 function startGame() {
   reset();
   state = STATE.PLAYING;
@@ -1707,32 +1837,32 @@ function startGame() {
 function gameOver() {
   state = STATE.OVER;
   const finalScore = Math.floor(score);
-  if (finalScore > highScore) {
-    highScore = finalScore;
-  }
+  if (finalScore > highScore) highScore = finalScore;
   saveProgress();
   finalScoreEl.textContent = finalScore;
-  highScoreEl.textContent = highScore;
-  runCoinsEl.textContent = coins;
-  runDistEl.textContent = runDistanceM + 'm';
+  highScoreEl.textContent  = highScore;
+  runCoinsEl.textContent   = coins;
+  runDistEl.textContent    = runDistanceM + 'm';
   gameOverEl.classList.remove('hidden');
   hudEl.classList.add('hidden');
+
   // Crash burst
-  const px = laneXAtVisual(player.visualLane, 0);
-  const py = projectY(0);
-  for (let i = 0; i < 40; i++) {
-    particles.push({
-      x: px,
-      y: py - 80,
-      vx: (Math.random() - 0.5) * 700,
-      vy: -Math.random() * 500 - 80,
-      life: 1.0, maxLife: 1.0,
-      color: ['#ff8c3a', '#ffd84a', '#ffffff', '#c44a10'][i % 4],
-      size: 4,
-    });
+  const px = player.x, py = playerObj.root.position.y + 1.0, pz = 0;
+  for (let i = 0; i < 36; i++) {
+    spawnParticle(
+      px, py, pz,
+      (Math.random() - 0.5) * 12,
+      Math.random() * 6 + 2,
+      (Math.random() - 0.5) * 12,
+      0.9,
+      ['#ff8c3a', '#ffd84a', '#ffffff', '#c44a10'][i % 4],
+      true,
+    );
   }
 }
 
-// init menu
+/* =============================================================
+ * 20. Boot
+ * ============================================================= */
 showMenu('main');
 requestAnimationFrame(loop);
