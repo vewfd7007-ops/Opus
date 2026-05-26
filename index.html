@@ -79,10 +79,26 @@
       </div>
     </div>
 
-    <div id="skin-grid" class="skin-grid"></div>
+    <div class="shop-stage">
+      <button id="shop-prev" class="shop-nav" aria-label="Previous skin">&#8249;</button>
+      <div id="shop-preview-wrap" class="shop-preview-wrap">
+        <div id="shop-rarity" class="shop-rarity-badge common">COMMON</div>
+        <canvas id="shop-preview" class="shop-preview-canvas"></canvas>
+        <div id="shop-locked-overlay" class="shop-locked-overlay hidden">
+          <svg viewBox="0 0 24 24" width="64" height="64" aria-hidden="true">
+            <path d="M6 10V8a6 6 0 1 1 12 0v2h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1Zm2 0h8V8a4 4 0 0 0-8 0v2Z" fill="#ffcc33"/>
+          </svg>
+        </div>
+      </div>
+      <button id="shop-next" class="shop-nav" aria-label="Next skin">&#8250;</button>
+    </div>
+
+    <div class="shop-info">
+      <div id="shop-skin-name" class="shop-name">Rookie</div>
+      <div id="shop-dots" class="shop-dots"></div>
+    </div>
 
     <div class="shop-footer">
-      <div id="selected-skin-name" class="selected-name">Rookie</div>
       <button id="shop-action-btn" class="btn">EQUIPPED</button>
     </div>
   </div>

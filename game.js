@@ -189,22 +189,25 @@ function spawnPattern() {
   const r = Math.random();
   const dist = 1500;
 
-  // Probabilities (sum = 1)
-  //  0.00 - 0.18  defender + hoop  (18%)
-  //  0.18 - 0.40  cone (single or double)  (22%)
-  //  0.40 - 0.62  lowbar slide  (22%)
-  //  0.62 - 0.74  banner overhead slide  (12%)
-  //  0.74 - 0.93  ball pickups  (19%)
+  // Probabilities (sum = 1) - defender rate reduced to make dunk a special moment.
+  //  0.00 - 0.10  defender + hoop  (10%)  <- reduced from 18%
+  //  0.10 - 0.32  cone  (22%)
+  //  0.32 - 0.58  lowbar slide  (26%)  <- bumped, more sliding action
+  //  0.58 - 0.72  banner overhead slide  (14%)
+  //  0.72 - 0.93  ball pickups  (21%)
   //  0.93 - 1.00  combo balls + cone  (7%)
 
-  if (r < 0.18) {
+  if (r < 0.10) {
     // Defender with hoop behind him
     const lane = Math.random() < 0.5 ? 0 : 1;
-    const def = { kind: 'defender', lane, d: dist, fallProgress: 0 };
-    const hoop = { kind: 'hoop', lane, d: dist + 220, scored: false };
+    const def = {
+      kind: 'defender', lane, d: dist,
+      fallProgress: 0, jumpProgress: 0, idleBob: Math.random() * Math.PI * 2,
+    };
+    const hoop = { kind: 'hoop', lane, d: dist + 240, scored: false };
     def.linkedHoop = hoop;
     obstacles.push(def, hoop);
-  } else if (r < 0.40) {
+  } else if (r < 0.32) {
     // Cone(s) - jump over
     const both = Math.random() < 0.18;
     if (both) {
@@ -215,15 +218,15 @@ function spawnPattern() {
     } else {
       obstacles.push({ kind: 'cone', lane: Math.random() < 0.5 ? 0 : 1, d: dist });
     }
-  } else if (r < 0.62) {
+  } else if (r < 0.58) {
     // LOWBAR - real slide obstacle (limbo bar at chest height)
     const span = Math.random();
-    if (span < 0.4) {
+    if (span < 0.5) {
       obstacles.push({ kind: 'lowbar', lane: -1, d: dist });
     } else {
       obstacles.push({ kind: 'lowbar', lane: Math.random() < 0.5 ? 0 : 1, d: dist });
     }
-  } else if (r < 0.74) {
+  } else if (r < 0.72) {
     const both = Math.random() < 0.6;
     obstacles.push({
       kind: 'banner',
@@ -290,19 +293,31 @@ function update(dt) {
     player.dunkPhase += dt / player.dunkDuration;
     const p = Math.min(1, player.dunkPhase);
 
-    // defender starts falling at 0.30
-    if (player.dunkTarget && p > 0.3) {
-      const fp = Math.min(1, (p - 0.3) / 0.4);
-      player.dunkTarget.fallProgress = fp;
-      // dust as he falls
-      if (fp > 0.4 && fp < 0.6 && Math.random() < 0.6) {
-        const dx = laneXAt(player.dunkTarget.lane, Math.max(0, player.dunkTarget.d));
-        const dy = projectY(Math.max(0, player.dunkTarget.d));
-        particles.push({
-          x: dx + (Math.random() - 0.5) * 40, y: dy,
-          vx: (Math.random() - 0.5) * 200, vy: -Math.random() * 120,
-          life: 0.4, maxLife: 0.4, color: '#d9a574',
-        });
+    // Defender phases:
+    //   0.00-0.45  jumps up trying to block (peak ~0.25)
+    //   0.45-0.85  starts falling backwards (posterized!)
+    if (player.dunkTarget) {
+      // Block-jump attempt
+      if (p < 0.45) {
+        const jp = p / 0.45;            // 0 -> 1
+        player.dunkTarget.jumpProgress = Math.sin(jp * Math.PI) * 0.95;
+      } else {
+        player.dunkTarget.jumpProgress = 0;
+      }
+      // Fall back from impact
+      if (p > 0.45) {
+        const fp = Math.min(1, (p - 0.45) / 0.4);
+        player.dunkTarget.fallProgress = fp;
+        // dust as he falls
+        if (fp > 0.4 && fp < 0.7 && Math.random() < 0.7) {
+          const dx = laneXAt(player.dunkTarget.lane, Math.max(0, player.dunkTarget.d));
+          const dy = projectY(Math.max(0, player.dunkTarget.d));
+          particles.push({
+            x: dx + (Math.random() - 0.5) * 50, y: dy,
+            vx: (Math.random() - 0.5) * 240, vy: -Math.random() * 140,
+            life: 0.45, maxLife: 0.45, color: '#d9a574',
+          });
+        }
       }
     }
 
@@ -375,10 +390,21 @@ function update(dt) {
   distance += speed;
   score += speed * dt * 2.2;
 
-  // Smooth lane interpolation with ease-out
-  player.laneSwitchT = Math.min(1, player.laneSwitchT + dt * 6.5);
+  // Smoother, snappier lane interpolation with ease-out (faster than before)
+  player.laneSwitchT = Math.min(1, player.laneSwitchT + dt * 9.0);
   const tEased = 1 - Math.pow(1 - player.laneSwitchT, 3); // ease-out cubic
   player.visualLane = player.prevLane + (player.lane - player.prevLane) * tEased;
+
+  // Defender block-prep: raise arms higher as player gets close (idle state)
+  for (const o of obstacles) {
+    if (o.kind === 'defender' && o.fallProgress < 0.05 && player.state !== 'dunkAttack') {
+      // proximity 0..1 (0 = far, 1 = at player), in trigger window 60-600
+      const prox = Math.max(0, Math.min(1, 1 - (o.d - 60) / 540));
+      o.blockPrep = prox; // used by drawDefender
+      // small idle bob
+      o.idleBob = (o.idleBob || 0) + dt * 6;
+    }
+  }
 
   if (player.stateTimer > 0) {
     player.stateTimer -= dt;
@@ -477,6 +503,18 @@ function setLane(targetLane) {
     player.prevLane = player.visualLane; // start from current visual position
     player.lane = targetLane;
     player.laneSwitchT = 0;
+    // Dust burst on push-off
+    const lx = laneXAtVisual(player.visualLane, 0);
+    const ly = projectY(0);
+    const dir = targetLane === 0 ? -1 : 1;
+    for (let i = 0; i < 6; i++) {
+      particles.push({
+        x: lx, y: ly + 4,
+        vx: -dir * (60 + Math.random() * 140),
+        vy: -Math.random() * 90,
+        life: 0.32, maxLife: 0.32, color: '#d9a574',
+      });
+    }
   }
   if (player.state === 'slide' || player.state === 'jump') return;
   player.state = targetLane === 0 ? 'crossover' : 'behindBack';
@@ -519,7 +557,7 @@ function swipeUp() {
   for (const o of obstacles) {
     if (o.kind !== 'defender' || !o.linkedHoop || o.processed) continue;
     if (o.lane !== player.lane) continue;
-    if (o.d > 80 && o.d < 520) { trigger = o; break; }
+    if (o.d > 60 && o.d < 600) { trigger = o; break; }
   }
 
   if (trigger) {
@@ -717,17 +755,22 @@ function drawObstacle(o) {
 
 function drawDefender(x, y, scale, o) {
   const fall = o ? (o.fallProgress || 0) : 0;
+  const jump = o ? (o.jumpProgress || 0) : 0;     // 0..1 block-jump amount
+  const blockPrep = o ? (o.blockPrep || 0) : 0;   // 0..1 close-proximity arm raise
+  const idle = o ? (o.idleBob || 0) : 0;
   const h = 200 * scale;
   const w = 56 * scale;
 
-  // shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  // shadow (shrinks while jumping)
+  ctx.fillStyle = `rgba(0,0,0,${0.35 * (1 - jump * 0.5)})`;
   ctx.beginPath();
-  ctx.ellipse(x, y + 2, w * 0.7, w * 0.22, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y + 2, w * 0.7 * (1 - jump * 0.3), w * 0.22 * (1 - jump * 0.3), 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.save();
-  ctx.translate(x, y);
+  // Lift defender up when block-jumping
+  const jumpY = -130 * scale * jump;
+  ctx.translate(x, y + jumpY);
 
   if (fall > 0) {
     // Falling backwards: rotate around feet
@@ -744,18 +787,26 @@ function drawDefender(x, y, scale, o) {
         drawStar(sx, sy, 5 * scale);
       }
     }
+  } else {
+    // small idle bounce while waiting (defensive shuffle)
+    const idleY = Math.sin(idle) * 2 * scale;
+    ctx.translate(0, idleY);
   }
 
-  // legs (shorts)
+  // Crouch slightly when block-prepping or jumping
+  const crouch = Math.max(blockPrep * 0.06, jump * 0.04);
+  // legs (shorts) - bend at knees while jumping
+  const legBend = jump * 12 * scale;
   ctx.fillStyle = '#1a3a8a';
   ctx.fillRect(-w * 0.4, -h * 0.45, w * 0.3, h * 0.2);
   ctx.fillRect(w * 0.1, -h * 0.45, w * 0.3, h * 0.2);
   ctx.fillStyle = '#5a3520';
-  ctx.fillRect(-w * 0.36, -h * 0.25, w * 0.22, h * 0.22);
-  ctx.fillRect(w * 0.14, -h * 0.25, w * 0.22, h * 0.22);
+  // calves (tucked when jumping)
+  ctx.fillRect(-w * 0.36, -h * 0.25 + legBend, w * 0.22, h * 0.22 - legBend);
+  ctx.fillRect(w * 0.14, -h * 0.25 + legBend, w * 0.22, h * 0.22 - legBend);
   ctx.fillStyle = '#fff';
-  ctx.fillRect(-w * 0.42, -4 * scale, w * 0.32, 8 * scale);
-  ctx.fillRect(w * 0.1, -4 * scale, w * 0.32, 8 * scale);
+  ctx.fillRect(-w * 0.42, -4 * scale + legBend, w * 0.32, 8 * scale);
+  ctx.fillRect(w * 0.1, -4 * scale + legBend, w * 0.32, 8 * scale);
 
   // jersey
   const jg = ctx.createLinearGradient(0, -h, 0, -h * 0.45);
@@ -775,19 +826,41 @@ function drawDefender(x, y, scale, o) {
   ctx.textBaseline = 'middle';
   ctx.fillText('23', 0, -h * 0.6);
 
-  // ARMS - block-up pose. As player approaches, raise higher.
-  // If fall > 0, arms drop to sides.
-  const armRaise = Math.max(0, 1 - Math.max(0, fall * 1.4));
-  const armY = -h * (0.78 + 0.12 * armRaise);
+  // ARMS - block-up pose. Arms reach UP when blockPrep + jump are high.
+  // When fall > 0 arms drop to sides.
+  const armEnergy = Math.max(0, 1 - Math.max(0, fall * 1.4));
+  // base raise: small lift when blockPrep, big lift when jumping
+  const reach = (blockPrep * 0.4 + jump * 1.0) * armEnergy;
+  // armY moves higher (more negative) as reach grows
+  const armY = -h * (0.78 + 0.35 * reach);
+  // hands spread wider when reaching higher
+  const armSpread = w * (1.05 + 0.15 * reach);
   ctx.fillStyle = '#5a3520';
-  // upper arm
-  ctx.fillRect(-w * 1.05, armY, w * 0.3, w * 0.22);
-  ctx.fillRect(w * 0.75, armY, w * 0.3, w * 0.22);
-  // hands
-  ctx.beginPath();
-  ctx.arc(-w * 1.1, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
-  ctx.arc(w * 1.1, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
-  ctx.fill();
+  // Vertical arm shafts (forearm pointing UP when reaching)
+  if (reach > 0.15) {
+    // Reaching up: draw arms as vertical bars going up from shoulder
+    ctx.save();
+    ctx.translate(-w * 0.42, -h * 0.78);
+    ctx.fillRect(-w * 0.12, -h * 0.18 * reach, w * 0.24, h * 0.18 * reach + 4 * scale);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(w * 0.42, -h * 0.78);
+    ctx.fillRect(-w * 0.12, -h * 0.18 * reach, w * 0.24, h * 0.18 * reach + 4 * scale);
+    ctx.restore();
+    // hands at top
+    ctx.beginPath();
+    ctx.arc(-w * 0.42, -h * (0.78 + 0.18 * reach), w * 0.20, 0, Math.PI * 2);
+    ctx.arc(w * 0.42, -h * (0.78 + 0.18 * reach), w * 0.20, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // idle: arms out to sides
+    ctx.fillRect(-armSpread, armY, w * 0.3, w * 0.22);
+    ctx.fillRect(armSpread - w * 0.3, armY, w * 0.3, w * 0.22);
+    ctx.beginPath();
+    ctx.arc(-armSpread - w * 0.05, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
+    ctx.arc(armSpread + w * 0.05, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   // head
   ctx.fillStyle = '#5a3520';
@@ -811,9 +884,27 @@ function drawDefender(x, y, scale, o) {
       ctx.lineTo(ex - 4 * scale, eyeY + 4 * scale);
       ctx.stroke();
     });
+  } else {
+    // determined eyes (look up when reaching)
+    ctx.fillStyle = '#fff';
+    const ey = -h * 0.88 - reach * 2 * scale;
+    ctx.fillRect(-w * 0.16, ey, w * 0.10, 4 * scale);
+    ctx.fillRect(w * 0.06, ey, w * 0.10, 4 * scale);
+    ctx.fillStyle = '#1a0a00';
+    ctx.fillRect(-w * 0.13, ey, w * 0.05, 4 * scale);
+    ctx.fillRect(w * 0.09, ey, w * 0.05, 4 * scale);
   }
 
   ctx.restore();
+
+  // Warning glow when in dunk-trigger range (player can swipe up here!)
+  if (o && !fall && blockPrep > 0.35 && o.d > 60 && o.d < 600) {
+    const glowA = 0.3 + Math.sin(player.animTime * 8) * 0.15;
+    ctx.fillStyle = `rgba(255,204,51,${glowA})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y + 2, w * 0.95, w * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 
@@ -913,10 +1004,17 @@ function drawLowBarSingle(x, y, scale) {
   ctx.fillStyle = '#1a0a00';
   ctx.fillRect(x - w * 0.5 - 4 * scale, y - 100 * scale, 6 * scale, 100 * scale);
   ctx.fillRect(x + w * 0.5 - 2 * scale, y - 100 * scale, 6 * scale, 100 * scale);
-  // post caps
+  // post caps (warning lights)
   ctx.fillStyle = '#ffcc33';
   ctx.fillRect(x - w * 0.5 - 6 * scale, y - 100 * scale - 6 * scale, 10 * scale, 6 * scale);
   ctx.fillRect(x + w * 0.5 - 4 * scale, y - 100 * scale - 6 * scale, 10 * scale, 6 * scale);
+  // blinking warning bulbs on posts
+  const blink = (Math.sin(player.animTime * 8) + 1) * 0.5;
+  ctx.fillStyle = `rgba(255,80,80,${0.5 + blink * 0.5})`;
+  ctx.beginPath();
+  ctx.arc(x - w * 0.5 - 1 * scale, y - 100 * scale - 3 * scale, 4 * scale, 0, Math.PI * 2);
+  ctx.arc(x + w * 0.5 + 1 * scale, y - 100 * scale - 3 * scale, 4 * scale, 0, Math.PI * 2);
+  ctx.fill();
   // shadow under bar
   ctx.fillStyle = 'rgba(0,0,0,0.25)';
   ctx.beginPath();
@@ -924,6 +1022,21 @@ function drawLowBarSingle(x, y, scale) {
   ctx.fill();
   // candy striped bar
   drawStripedBar(x - w * 0.5, barY - 7 * scale, w, 14 * scale);
+  // "SLIDE" indicator above bar pointing down
+  if (scale > 0.45) {
+    ctx.fillStyle = '#ffcc33';
+    ctx.font = `900 ${12 * scale}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('SLIDE', x, barY - 14 * scale);
+    // arrow down
+    ctx.beginPath();
+    ctx.moveTo(x - 6 * scale, barY - 12 * scale);
+    ctx.lineTo(x + 6 * scale, barY - 12 * scale);
+    ctx.lineTo(x, barY - 6 * scale);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 function drawLowBarSpan(d, scale) {
@@ -934,13 +1047,35 @@ function drawLowBarSpan(d, scale) {
   const left = xL - pad;
   const right = xR + pad;
   const barY = y - 90 * scale;
+  const cx = (left + right) / 2;
   ctx.fillStyle = '#1a0a00';
   ctx.fillRect(left - 4 * scale, y - 100 * scale, 6 * scale, 100 * scale);
   ctx.fillRect(right - 2 * scale, y - 100 * scale, 6 * scale, 100 * scale);
   ctx.fillStyle = '#ffcc33';
   ctx.fillRect(left - 6 * scale, y - 100 * scale - 6 * scale, 10 * scale, 6 * scale);
   ctx.fillRect(right - 4 * scale, y - 100 * scale - 6 * scale, 10 * scale, 6 * scale);
+  // blinking bulbs
+  const blink = (Math.sin(player.animTime * 8) + 1) * 0.5;
+  ctx.fillStyle = `rgba(255,80,80,${0.5 + blink * 0.5})`;
+  ctx.beginPath();
+  ctx.arc(left - 1 * scale, y - 100 * scale - 3 * scale, 4 * scale, 0, Math.PI * 2);
+  ctx.arc(right + 1 * scale, y - 100 * scale - 3 * scale, 4 * scale, 0, Math.PI * 2);
+  ctx.fill();
   drawStripedBar(left, barY - 7 * scale, right - left, 14 * scale);
+  // Center "SLIDE" indicator
+  if (scale > 0.45) {
+    ctx.fillStyle = '#ffcc33';
+    ctx.font = `900 ${14 * scale}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('SLIDE', cx, barY - 14 * scale);
+    ctx.beginPath();
+    ctx.moveTo(cx - 7 * scale, barY - 12 * scale);
+    ctx.lineTo(cx + 7 * scale, barY - 12 * scale);
+    ctx.lineTo(cx, barY - 5 * scale);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 function drawStripedBar(x, y, w, h) {
@@ -1098,6 +1233,7 @@ function drawPlayer() {
   let isSlide = false;
   let sideStep = 0;     // -1..1 visual side-step kick
   let bodyTwist = 0;
+  let laneHopY = 0;     // small jump arc while switching lanes
 
   if (player.state === 'crossover') {
     const t = 1 - player.stateTimer / ANIM.crossover;
@@ -1116,16 +1252,19 @@ function drawPlayer() {
     ballPos = 'dunk';
   }
 
-  // Lane-switch side-step kick (visual)
+  // Lane-switch side-step kick + small hop (snappy Subway-Surfers feel)
   if (player.laneSwitchT < 1) {
     const dir = Math.sign(player.lane - player.prevLane) || 0;
     const sw = 1 - Math.pow(1 - player.laneSwitchT, 2);
-    sideStep = dir * Math.sin(sw * Math.PI) * 0.6;
-    lean += dir * Math.sin(sw * Math.PI) * 0.18;
+    sideStep = dir * Math.sin(sw * Math.PI) * 0.7;
+    lean += dir * Math.sin(sw * Math.PI) * 0.28;  // stronger lean
+    if (!isSlide && player.state !== 'jump') {
+      laneHopY = -22 * Math.sin(player.laneSwitchT * Math.PI); // small arc
+    }
   }
 
   ctx.save();
-  ctx.translate(x, baseY);
+  ctx.translate(x, baseY + laneHopY);
   ctx.rotate(lean);
 
   const runT = player.animTime * 14;
@@ -1563,6 +1702,7 @@ function loop(now) {
   lastT = now;
   update(dt);
   render();
+  if (state === STATE.SHOP) renderShopPreview(dt);
   requestAnimationFrame(loop);
 }
 
@@ -1581,17 +1721,24 @@ const coinsShopEl = document.getElementById('coins-shop');
 const finalScoreEl = document.getElementById('final-score-val');
 const coinsEarnedEl = document.getElementById('coins-earned-val');
 const highScoreEl = document.getElementById('high-score-val');
-const skinGridEl = document.getElementById('skin-grid');
-const selectedSkinNameEl = document.getElementById('selected-skin-name');
+
+// Shop elements
+const shopPreviewCanvas = document.getElementById('shop-preview');
+const shopPreviewCtx = shopPreviewCanvas.getContext('2d');
+const shopRarityEl = document.getElementById('shop-rarity');
+const shopNameEl = document.getElementById('shop-skin-name');
+const shopDotsEl = document.getElementById('shop-dots');
 const shopActionBtn = document.getElementById('shop-action-btn');
+const shopLockedOverlay = document.getElementById('shop-locked-overlay');
+const shopPreviewWrap = document.getElementById('shop-preview-wrap');
 
 document.getElementById('play-btn').addEventListener('click', startGame);
 document.getElementById('retry-btn').addEventListener('click', startGame);
 document.getElementById('shop-btn').addEventListener('click', openShop);
 document.getElementById('shop-back').addEventListener('click', closeShop);
 document.getElementById('gameover-menu-btn').addEventListener('click', backToMenu);
-
-let selectedShopSkinId = equippedSkinId;
+document.getElementById('shop-prev').addEventListener('click', () => shopNav(-1));
+document.getElementById('shop-next').addEventListener('click', () => shopNav(1));
 
 function startGame() {
   reset();
@@ -1658,16 +1805,27 @@ function flashHud() {
 
 
 // =====================================================================
-// SHOP
+// SHOP - Subway-Surfers-style: big preview, prev/next nav, animated character
 // =====================================================================
+let shopIdx = 0;
+let shopAnimTime = 0;
+let shopSlideAnim = 0;       // animation progress for skin transitions
+let shopSlideFrom = 0;        // direction of last nav (-1 or +1, 0 = none)
+let shopPreviewSize = { w: 0, h: 0 };
+
 function openShop() {
   state = STATE.SHOP;
-  selectedShopSkinId = equippedSkinId;
+  shopIdx = SKINS.findIndex((s) => s.id === equippedSkinId);
+  if (shopIdx < 0) shopIdx = 0;
+  shopSlideAnim = 1; // settled
+  shopSlideFrom = 0;
   menuEl.classList.add('hidden');
   shopEl.classList.remove('hidden');
   refreshMenuCoins();
-  buildShop();
+  fitShopCanvas();
+  refreshShopUI();
 }
+
 function closeShop() {
   state = STATE.MENU;
   shopEl.classList.add('hidden');
@@ -1675,88 +1833,71 @@ function closeShop() {
   refreshMenuCoins();
 }
 
-function buildShop() {
-  skinGridEl.innerHTML = '';
-  for (const skin of SKINS) {
-    const card = document.createElement('div');
-    card.className = 'skin-card';
-    card.dataset.id = skin.id;
-
-    const owned = unlockedSkins.has(skin.id);
-    const equipped = skin.id === equippedSkinId;
-    const selected = skin.id === selectedShopSkinId;
-
-    if (selected) card.classList.add('selected');
-    if (equipped) card.classList.add('equipped');
-    if (!owned) card.classList.add('locked');
-
-    // Rarity tag
-    const rar = document.createElement('div');
-    rar.className = 'skin-rarity ' + skin.rarity;
-    rar.textContent = skin.rarity.toUpperCase();
-    card.appendChild(rar);
-
-    // Preview canvas
-    const preview = document.createElement('canvas');
-    preview.className = 'skin-preview';
-    preview.width = 180;
-    preview.height = 240;
-    card.appendChild(preview);
-
-    const name = document.createElement('div');
-    name.className = 'skin-name';
-    name.textContent = skin.name;
-    card.appendChild(name);
-
-    const price = document.createElement('div');
-    price.className = 'skin-price';
-    if (owned) {
-      price.classList.add('owned');
-      price.textContent = equipped ? 'EQUIPPED' : 'OWNED';
-    } else {
-      price.classList.add('locked');
-      if (coins < skin.price) price.classList.add('cant-afford');
-      const dot = document.createElement('span');
-      dot.className = 'coin-dot';
-      price.appendChild(dot);
-      const num = document.createElement('span');
-      num.textContent = skin.price.toLocaleString();
-      price.appendChild(num);
-    }
-    card.appendChild(price);
-
-    card.addEventListener('click', () => selectShopSkin(skin.id));
-
-    skinGridEl.appendChild(card);
-
-    // draw preview after attach
-    drawSkinPreview(preview, skin, selected);
-  }
-  refreshShopFooter();
+function shopNav(delta) {
+  const next = (shopIdx + delta + SKINS.length) % SKINS.length;
+  if (next === shopIdx) return;
+  shopSlideFrom = delta; // -1 = came from left side (next pushes from right)
+  shopSlideAnim = 0;     // restart slide
+  shopIdx = next;
+  refreshShopUI();
 }
 
-function selectShopSkin(id) {
-  selectedShopSkinId = id;
-  // refresh selection visuals
-  for (const el of skinGridEl.querySelectorAll('.skin-card')) {
-    const isSel = el.dataset.id === id;
-    el.classList.toggle('selected', isSel);
-    const skin = getSkin(el.dataset.id);
-    const previewCanvas = el.querySelector('.skin-preview');
-    if (previewCanvas) drawSkinPreview(previewCanvas, skin, isSel);
+function fitShopCanvas() {
+  const rect = shopPreviewCanvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    // try once more on next frame (shop may not be laid out yet)
+    requestAnimationFrame(fitShopCanvas);
+    return;
   }
-  refreshShopFooter();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  shopPreviewCanvas.width = Math.floor(rect.width * dpr);
+  shopPreviewCanvas.height = Math.floor(rect.height * dpr);
+  shopPreviewCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  shopPreviewSize.w = rect.width;
+  shopPreviewSize.h = rect.height;
 }
 
-function refreshShopFooter() {
-  const skin = getSkin(selectedShopSkinId);
-  selectedSkinNameEl.textContent = skin.name;
+window.addEventListener('resize', () => {
+  if (state === STATE.SHOP) fitShopCanvas();
+});
 
+function refreshShopUI() {
+  const skin = SKINS[shopIdx];
+  const owned = unlockedSkins.has(skin.id);
+  const equipped = skin.id === equippedSkinId;
+
+  // Name
+  shopNameEl.textContent = skin.name;
+  // Rarity
+  shopRarityEl.className = 'shop-rarity-badge ' + skin.rarity;
+  shopRarityEl.textContent = skin.rarity.toUpperCase();
+  // Locked overlay
+  shopLockedOverlay.classList.toggle('hidden', owned);
+
+  // Dots
+  shopDotsEl.innerHTML = '';
+  for (let i = 0; i < SKINS.length; i++) {
+    const dot = document.createElement('button');
+    dot.className = 'shop-dot';
+    if (i === shopIdx) dot.classList.add('active');
+    if (unlockedSkins.has(SKINS[i].id)) dot.classList.add('owned');
+    dot.setAttribute('aria-label', SKINS[i].name);
+    dot.addEventListener('click', () => {
+      if (i === shopIdx) return;
+      shopSlideFrom = Math.sign(i - shopIdx);
+      shopSlideAnim = 0;
+      shopIdx = i;
+      refreshShopUI();
+    });
+    shopDotsEl.appendChild(dot);
+  }
+
+  // Button
   shopActionBtn.classList.remove('btn-secondary', 'btn-gold');
   shopActionBtn.disabled = false;
 
-  if (unlockedSkins.has(skin.id)) {
-    if (skin.id === equippedSkinId) {
+  if (owned) {
+    if (equipped) {
       shopActionBtn.textContent = 'EQUIPPED';
       shopActionBtn.disabled = true;
     } else {
@@ -1766,11 +1907,15 @@ function refreshShopFooter() {
       if (skin.id === equippedSkinId) return;
       equippedSkinId = skin.id;
       saveEquipped();
-      buildShop();
+      refreshShopUI();
     };
   } else {
-    shopActionBtn.textContent = `BUY  ${skin.price.toLocaleString()}`;
     shopActionBtn.classList.add('btn-gold');
+    shopActionBtn.innerHTML =
+      `BUY <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+         <circle cx="12" cy="12" r="10" fill="#fff" stroke="#5a3d00" stroke-width="2"/>
+         <text x="12" y="16" text-anchor="middle" font-size="12" font-weight="900" fill="#5a3d00">$</text>
+       </svg> ${skin.price.toLocaleString()}`;
     if (coins < skin.price) shopActionBtn.disabled = true;
     shopActionBtn.onclick = () => {
       if (coins < skin.price) return;
@@ -1781,44 +1926,163 @@ function refreshShopFooter() {
       equippedSkinId = skin.id;
       saveEquipped();
       refreshMenuCoins();
-      buildShop();
+      // Celebration burst
+      shopBurst();
+      refreshShopUI();
     };
   }
 }
 
-function drawSkinPreview(canvasEl, skin, highlight) {
-  const c = canvasEl.getContext('2d');
-  const cw = canvasEl.width;
-  const ch = canvasEl.height;
+// Tiny celebration when buying a skin
+let shopBurstParticles = [];
+function shopBurst() {
+  for (let i = 0; i < 24; i++) {
+    shopBurstParticles.push({
+      x: shopPreviewSize.w * 0.5,
+      y: shopPreviewSize.h * 0.5,
+      vx: (Math.random() - 0.5) * 360,
+      vy: -Math.random() * 320 - 60,
+      life: 0.85, maxLife: 0.85,
+      color: ['#ffcc33', '#ff6b1a', '#ffffff', '#2ecc71'][i % 4],
+    });
+  }
+}
+
+// Shop preview render (called from main loop every frame while in SHOP)
+function renderShopPreview(dt) {
+  if (!shopPreviewSize.w || !shopPreviewSize.h) return;
+  shopAnimTime += dt;
+  shopSlideAnim = Math.min(1, shopSlideAnim + dt * 7);
+  const c = shopPreviewCtx;
+  const cw = shopPreviewSize.w;
+  const ch = shopPreviewSize.h;
   c.clearRect(0, 0, cw, ch);
 
-  // background
-  const bg = c.createLinearGradient(0, 0, 0, ch);
-  if (highlight) {
-    bg.addColorStop(0, 'rgba(255,204,51,0.18)');
-    bg.addColorStop(1, 'rgba(255,107,26,0.08)');
-  } else {
-    bg.addColorStop(0, 'rgba(255,107,26,0.08)');
-    bg.addColorStop(1, 'rgba(255,107,26,0.02)');
-  }
-  c.fillStyle = bg;
+  // Gradient floor
+  const floorY = ch * 0.86;
+  const sky = c.createLinearGradient(0, 0, 0, floorY);
+  sky.addColorStop(0, 'rgba(255, 107, 26, 0.05)');
+  sky.addColorStop(1, 'rgba(255, 107, 26, 0.02)');
+  c.fillStyle = sky;
+  c.fillRect(0, 0, cw, floorY);
+
+  const skin = SKINS[shopIdx];
+  const owned = unlockedSkins.has(skin.id);
+
+  // Spotlight beam from top
+  const beam = c.createRadialGradient(cw * 0.5, ch * 0.4, 10, cw * 0.5, ch * 0.4, cw * 0.7);
+  beam.addColorStop(0, owned ? 'rgba(255, 204, 51, 0.18)' : 'rgba(255, 107, 26, 0.15)');
+  beam.addColorStop(1, 'rgba(255, 107, 26, 0)');
+  c.fillStyle = beam;
   c.fillRect(0, 0, cw, ch);
 
-  // floor
-  c.fillStyle = 'rgba(0,0,0,0.18)';
+  // Court floor disc
+  c.fillStyle = 'rgba(122, 74, 34, 0.55)';
   c.beginPath();
-  c.ellipse(cw / 2, ch * 0.88, cw * 0.32, 8, 0, 0, Math.PI * 2);
+  c.ellipse(cw * 0.5, floorY, cw * 0.42, cw * 0.10, 0, 0, Math.PI * 2);
+  c.fill();
+  c.strokeStyle = 'rgba(255,255,255,0.45)';
+  c.lineWidth = 2;
+  c.beginPath();
+  c.ellipse(cw * 0.5, floorY, cw * 0.36, cw * 0.085, 0, 0, Math.PI * 2);
+  c.stroke();
+
+  // Character shadow
+  c.fillStyle = 'rgba(0, 0, 0, 0.35)';
+  c.beginPath();
+  c.ellipse(cw * 0.5, floorY + 6, cw * 0.16, cw * 0.04, 0, 0, Math.PI * 2);
   c.fill();
 
-  // draw player using same body code, but on this context
-  ctx = c;
+  // Slide-in animation for the skin
+  const slideEase = 1 - Math.pow(1 - shopSlideAnim, 3);
+  const slideX = shopSlideFrom !== 0 ? (1 - slideEase) * shopSlideFrom * cw * 0.6 : 0;
+  const slideAlpha = 0.3 + 0.7 * slideEase;
+
+  // Draw player using existing body code on this context
+  const runT = shopAnimTime * 8;
+  const bob = -Math.abs(Math.sin(runT * 2)) * 3;
+  const scaleFactor = Math.min(cw / 220, ch / 280);
+
   c.save();
-  c.translate(cw / 2, ch * 0.92);
-  c.scale(0.95, 0.95);
-  drawPlayerBody(0, 0, 'dribble', skin);
-  c.restore();
+  c.globalAlpha = slideAlpha;
+  c.translate(cw * 0.5 + slideX, floorY + bob);
+  c.scale(scaleFactor, scaleFactor);
+  // Tiny idle sway
+  c.rotate(Math.sin(shopAnimTime * 1.3) * 0.02);
+
+  // Use main draw code on shop ctx
+  ctx = c;
+  drawPlayerBody(0, runT, 'dribble', skin);
   ctx = mainCtx;
+
+  c.restore();
+
+  // Burst particles
+  if (shopBurstParticles.length) {
+    for (const p of shopBurstParticles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 900 * dt;
+      p.life -= dt;
+      const a = Math.max(0, p.life / p.maxLife);
+      c.globalAlpha = a;
+      c.fillStyle = p.color;
+      c.fillRect(p.x - 3, p.y - 3, 6, 6);
+    }
+    c.globalAlpha = 1;
+    shopBurstParticles = shopBurstParticles.filter((p) => p.life > 0);
+  }
+
+  // Sparkles for legendary/epic
+  if (skin.rarity === 'legendary' || skin.rarity === 'epic') {
+    const count = skin.rarity === 'legendary' ? 6 : 3;
+    for (let i = 0; i < count; i++) {
+      const t = (shopAnimTime * 0.6 + i / count) % 1;
+      const ang = i * (Math.PI * 2 / count) + shopAnimTime * 0.3;
+      const rad = cw * 0.32;
+      const sx = cw * 0.5 + Math.cos(ang) * rad;
+      const sy = floorY - ch * 0.45 + Math.sin(ang) * (rad * 0.4);
+      const sa = Math.sin(t * Math.PI);
+      c.globalAlpha = sa;
+      c.fillStyle = skin.rarity === 'legendary' ? '#ffcc33' : '#c084fc';
+      const sz = 4 + Math.sin(shopAnimTime * 6 + i) * 2;
+      c.beginPath();
+      c.moveTo(sx, sy - sz);
+      c.lineTo(sx + sz * 0.4, sy);
+      c.lineTo(sx, sy + sz);
+      c.lineTo(sx - sz * 0.4, sy);
+      c.closePath();
+      c.fill();
+    }
+    c.globalAlpha = 1;
+  }
 }
+
+// Shop swipe handling
+let shopTouchStart = null;
+shopEl.addEventListener('touchstart', (e) => {
+  // ignore if touch starts on a button or scrolling element
+  const target = e.target;
+  if (target.closest('button')) return;
+  shopTouchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+}, { passive: true });
+shopEl.addEventListener('touchend', (e) => {
+  if (!shopTouchStart) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - shopTouchStart.x;
+  const dy = t.clientY - shopTouchStart.y;
+  shopTouchStart = null;
+  if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+    shopNav(dx < 0 ? 1 : -1);
+  }
+}, { passive: true });
+
+window.addEventListener('keydown', (e) => {
+  if (state !== STATE.SHOP) return;
+  if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') shopNav(-1);
+  else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') shopNav(1);
+  else if (e.key === 'Escape') closeShop();
+});
 
 
 requestAnimationFrame(loop);
