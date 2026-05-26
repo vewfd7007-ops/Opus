@@ -21,6 +21,10 @@
       <button id="pause-btn" class="icon-btn" aria-label="Pause">
         <svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1" fill="#fff"/><rect x="14" y="5" width="4" height="14" rx="1" fill="#fff"/></svg>
       </button>
+      <button id="mute-btn" class="icon-btn" aria-label="Sound">
+        <svg id="sound-on" viewBox="0 0 24 24" width="22" height="22"><path d="M3 9v6h4l5 5V4L7 9H3z" fill="#fff"/><path d="M16 7c2 1 3 2.8 3 5s-1 4-3 5" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <svg id="sound-off" viewBox="0 0 24 24" width="22" height="22" style="display:none"><path d="M3 9v6h4l5 5V4L7 9H3z" fill="#fff"/><path d="M16 9l5 5M21 9l-5 5" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
     </div>
     <div class="score-display">
       <span class="score-label">SCORE</span>
@@ -52,6 +56,16 @@
       <div class="subtitle">3D STREET RUNNER</div>
     </div>
 
+    <!-- Player profile chip -->
+    <div class="player-chip" id="player-chip">
+      <span class="chip-greet">HALLO,</span>
+      <span class="chip-name" id="chip-name">SPIELER</span>
+      <span class="chip-num" id="chip-num">#23</span>
+      <button id="profile-btn" class="chip-edit" aria-label="Profil bearbeiten">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" fill="#fff"/></svg>
+      </button>
+    </div>
+
     <button id="play-btn" class="btn btn-primary">PLAY</button>
 
     <div class="menu-row">
@@ -75,6 +89,69 @@
     </div>
   </div>
 
+  <!-- Setup dialog (first launch / profile edit) -->
+  <div id="setup" class="overlay hidden">
+    <div class="setup-card">
+      <h2>SPIELER</h2>
+      <div class="setup-sub">Erstelle dein Profil</div>
+
+      <label class="field">
+        <span class="field-label">Dein Name</span>
+        <input
+          id="setup-name"
+          type="text"
+          maxlength="12"
+          placeholder="DEIN NAME"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck="false"
+        />
+      </label>
+
+      <label class="field">
+        <span class="field-label">Trikotnummer (0-99)</span>
+        <input
+          id="setup-number"
+          type="number"
+          min="0"
+          max="99"
+          value="23"
+          inputmode="numeric"
+          pattern="[0-9]*"
+        />
+      </label>
+
+      <div id="setup-error" class="setup-error"></div>
+
+      <div class="setup-row">
+        <button id="setup-cancel" class="btn btn-secondary hidden">ABBRECHEN</button>
+        <button id="setup-save" class="btn btn-primary">WEITER</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tutorial dialog -->
+  <div id="tutorial" class="overlay hidden">
+    <div class="tut-card">
+      <div class="tut-progress" id="tut-progress"></div>
+
+      <div class="tut-icon">
+        <div class="swipe-arrow" id="tut-arrow">
+          <svg viewBox="0 0 60 60" width="64" height="64"><path id="tut-arrow-path" d="M 50 30 L 14 30 M 24 18 L 14 30 L 24 42" stroke="#fff" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="tut-hand" id="tut-hand">👆</div>
+      </div>
+
+      <h2 id="tut-title">CROSSOVER</h2>
+      <div class="tut-text" id="tut-text">Wische nach links, um einen Crossover zu spielen und die Lane zu wechseln.</div>
+
+      <div class="tut-row">
+        <button id="tut-skip" class="btn btn-secondary">SKIP</button>
+        <button id="tut-next" class="btn btn-primary">WEITER</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Skins -->
   <div id="skins" class="overlay hidden">
     <h2>SKINS</h2>
@@ -86,15 +163,9 @@
     <button id="skins-back" class="btn btn-secondary">BACK</button>
   </div>
 
-  <!-- How to play -->
+  <!-- How to play (legacy reference) -->
   <div id="howto" class="overlay hidden">
-    <h2>HOW TO PLAY</h2>
-    <div class="instructions">
-      <div class="row"><span class="swipe">&#8592;</span> Swipe links — Lane wechseln</div>
-      <div class="row"><span class="swipe">&#8594;</span> Swipe rechts — Lane wechseln</div>
-      <div class="row"><span class="swipe">&#8593;</span> Swipe hoch — Sprung / Dunk</div>
-      <div class="row"><span class="swipe">&#8595;</span> Swipe runter — Slide</div>
-    </div>
+    <h2>POWER-UPS</h2>
     <div class="powerup-list">
       <div class="pu-item"><span class="pu-dot magnet"></span> Magnet — zieht Coins an</div>
       <div class="pu-item"><span class="pu-dot multi"></span> 2× Score</div>
@@ -102,6 +173,7 @@
       <div class="pu-item"><span class="pu-dot rocket"></span> Rocket — fliege über Hindernisse</div>
     </div>
     <div class="hint">Phone: Swipe &middot; Desktop: Pfeiltasten / WASD &middot; ESC = Pause</div>
+    <button id="howto-tutorial" class="btn btn-primary">TUTORIAL ANSEHEN</button>
     <button id="howto-back" class="btn btn-secondary">BACK</button>
   </div>
 

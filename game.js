@@ -114,6 +114,90 @@ function saveProgress() {
 }
 
 /* =============================================================
+ * 3.5 Profile (player name + jersey number)
+ * ============================================================= */
+let playerName   = localStorage.getItem('hr_player_name')   || '';
+let playerNumber = localStorage.getItem('hr_player_number') || '';
+let tutorialDone = localStorage.getItem('hr_tutorial_done') === 'true';
+
+function isProfileSet() { return playerName.length > 0 && playerNumber.length > 0; }
+function saveProfile() {
+  localStorage.setItem('hr_player_name',   playerName);
+  localStorage.setItem('hr_player_number', playerNumber);
+}
+
+/* =============================================================
+ * 3.6 Audio (procedural Web Audio sounds, no external assets)
+ * ============================================================= */
+let audioCtx = null;
+let muted = localStorage.getItem('hr_muted') === 'true';
+
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+}
+
+function tone(freq, dur, type, vol, slideTo) {
+  if (muted || !audioCtx) return;
+  dur = dur || 0.12; type = type || 'sine'; vol = vol == null ? 0.16 : vol;
+  const t0 = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (slideTo) {
+    try { osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur); } catch (e) {}
+  }
+  gain.gain.setValueAtTime(vol, t0);
+  gain.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+
+function noiseBurst(dur, vol, lp) {
+  if (muted || !audioCtx) return;
+  dur = dur || 0.2; vol = vol == null ? 0.12 : vol; lp = lp || 1500;
+  const t0 = audioCtx.currentTime;
+  const samples = Math.floor(audioCtx.sampleRate * dur);
+  const buf = audioCtx.createBuffer(1, samples, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < samples; i++) data[i] = (Math.random() * 2 - 1) * 0.7;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = lp;
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(vol, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+  src.start(t0);
+  src.stop(t0 + dur + 0.02);
+}
+
+const sfx = {
+  click()      { tone(700, 0.04, 'square', 0.08); },
+  coin()       { tone(880, 0.07, 'sine', 0.16); setTimeout(() => tone(1320, 0.10, 'sine', 0.16), 55); },
+  power()      { tone(523, 0.07, 'square', 0.12); setTimeout(() => tone(659, 0.07, 'square', 0.12), 60); setTimeout(() => tone(784, 0.18, 'square', 0.12), 130); },
+  jump()       { tone(220, 0.14, 'square', 0.15, 480); },
+  slide()      { noiseBurst(0.32, 0.13, 700); },
+  crash()      { tone(180, 0.5, 'sawtooth', 0.20, 60); noiseBurst(0.45, 0.18, 600); },
+  crossover()  { tone(310, 0.05, 'square', 0.13); setTimeout(() => tone(180, 0.05, 'square', 0.10), 55); },
+  behindback() { tone(180, 0.05, 'square', 0.13); setTimeout(() => tone(310, 0.05, 'square', 0.10), 55); },
+  shield()     { tone(900, 0.14, 'sine', 0.14); setTimeout(() => tone(1320, 0.20, 'sine', 0.12), 70); },
+  rocket()     { tone(440, 0.4, 'sawtooth', 0.16, 1300); },
+  dribble()    { tone(120, 0.05, 'square', 0.06); },
+};
+
+/* =============================================================
  * 4. Lighting
  * ============================================================= */
 const hemi = new THREE.HemisphereLight(0xbfe4ff, 0x4a6a3a, 0.85);
@@ -382,6 +466,45 @@ function setMeshShadow(m) {
   m.receiveShadow = false;
 }
 
+/* Jersey-back number texture (drawn to a 2D canvas → CanvasTexture).
+ * Updated whenever the player's name/number changes via updateNumberTexture(). */
+const numberCanvas = document.createElement('canvas');
+numberCanvas.width = 256;
+numberCanvas.height = 256;
+const numberTexture = new THREE.CanvasTexture(numberCanvas);
+numberTexture.colorSpace = THREE.SRGBColorSpace;
+
+function updateNumberTexture() {
+  const c = numberCanvas.getContext('2d');
+  c.clearRect(0, 0, 256, 256);
+  const num = playerNumber || '23';
+  const nm  = (playerName || '').toUpperCase();
+
+  // Number — large, white with dark outline (NBA-style)
+  c.font = 'bold 170px Arial, sans-serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.lineWidth = 16;
+  c.lineJoin = 'round';
+  c.strokeStyle = '#0a0a14';
+  c.strokeText(num, 128, 150);
+  c.fillStyle = '#ffffff';
+  c.fillText(num, 128, 150);
+
+  // Name above (uppercase, smaller, arched would be nice but plain works)
+  if (nm) {
+    const trimmed = nm.length > 10 ? nm.slice(0, 10) : nm;
+    c.font = 'bold 36px Arial, sans-serif';
+    c.lineWidth = 6;
+    c.strokeStyle = '#0a0a14';
+    c.strokeText(trimmed, 128, 38);
+    c.fillStyle = '#ffffff';
+    c.fillText(trimmed, 128, 38);
+  }
+  numberTexture.needsUpdate = true;
+}
+updateNumberTexture();
+
 function buildPlayer() {
   const root = new THREE.Group();
   const bodyHolder = new THREE.Group();
@@ -528,10 +651,11 @@ function buildPlayer() {
   bodyHolder.add(legL.hip);
   bodyHolder.add(legR.hip);
 
-  // Basketball attached to right hand (its own group so we can hide/show)
+  // Basketball — parented to bodyHolder (NOT arm) so we can dribble it independently.
+  // Position is animated each frame in animatePlayer().
   const ballGroup = new THREE.Group();
-  ballGroup.position.set(0, -0.7, 0.05);
-  armR.elbow.add(ballGroup);
+  ballGroup.position.set(0.7, 0.85, 0.05);
+  bodyHolder.add(ballGroup);
   const ball = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 16), playerMats.ball);
   setMeshShadow(ball);
   ballGroup.add(ball);
@@ -542,6 +666,21 @@ function buildPlayer() {
   ballGroup.add(seam);
   const seam2 = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.012, 6, 18), seamMat);
   ballGroup.add(seam2);
+
+  // Number plate on the BACK of the jersey (visible because root is rotated 180° on Y).
+  // The plate sits at local -Z (back of torso); after the root flips, it ends up facing the camera.
+  const numberPlate = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.85, 0.85),
+    new THREE.MeshBasicMaterial({
+      map: numberTexture,
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  numberPlate.position.set(0, 1.62, -0.305);
+  numberPlate.rotation.y = Math.PI;
+  bodyHolder.add(numberPlate);
 
   // Shield aura (hidden by default)
   const auraGeo = new THREE.SphereGeometry(1.15, 24, 24);
@@ -584,6 +723,10 @@ function buildPlayer() {
 
 const playerObj = buildPlayer();
 playerObj.root.position.set(0, 0, 0);
+// Rotate the entire player 180° around Y so they face -Z (running away from
+// the camera into the world). Animations work in local space so the run cycle
+// still looks correct.
+playerObj.root.rotation.y = Math.PI;
 scene.add(playerObj.root);
 
 const player = {
@@ -1089,10 +1232,11 @@ function reset() {
   power.magnet = power.multi = power.shield = power.rocket = 0;
 
   playerObj.bodyHolder.rotation.set(0, 0, 0);
-  playerObj.root.rotation.set(0, 0, 0);
+  playerObj.root.rotation.set(0, Math.PI, 0); // keep facing -Z
   playerObj.root.position.set(0, 0, 0);
   playerObj.aura.visible = false;
   playerObj.pack.visible = false;
+  player._lastBounce = undefined;
 }
 
 /* =============================================================
@@ -1108,19 +1252,28 @@ function animatePlayer(dt) {
   let armLx = 0, armRx = 0, elbowLx = 0, elbowRx = 0;
   let legLx = 0, legRx = 0, kneeLx = 0, kneeRx = 0;
   let bodyTilt = 0;
+  let bodyTwistY = 0;
+
+  // Ball position in local (bodyHolder) space — animated below
+  // Local +X = player's right (world -X = screen left, since player rotated 180°)
+  let ballX = 0.7, ballY = 0.5, ballZ = 0.1;
+  let ballVisible = true;
 
   if (player.state === 'slide') {
-    // legs straight forward, body forward
     legLx = -1.4; legRx = -1.4;
     kneeLx = 0.3; kneeRx = 0.3;
     armLx = -2.1; armRx = -2.1;
     elbowLx = 0.4; elbowRx = 0.4;
     playerObj.bodyHolder.rotation.x = -1.2;
+    // Ball tucked at chest
+    ballX = 0; ballY = 0.3; ballZ = 0.25;
   } else if (player.state === 'rocket') {
     legLx = -0.2; legRx = -0.2;
     armLx = 0.3; armRx = 0.3;
     elbowLx = 0; elbowRx = 0;
     playerObj.bodyHolder.rotation.x = -0.4;
+    // Ball tucked under arm
+    ballX = 0.5; ballY = 1.0; ballZ = 0.15;
   } else if (player.state === 'dunk' || isAir) {
     // tuck legs, raise arms
     const tuck = 0.9;
@@ -1133,24 +1286,87 @@ function animatePlayer(dt) {
     elbowLx = 0.3;
     elbowRx = 0.3;
     playerObj.bodyHolder.rotation.x = -0.15;
-  } else {
-    // running: legs swing opposite
+    // Ball raised overhead in right hand
+    ballX = 0.45; ballY = 2.6 + player.y * 0.0; ballZ = -0.15;
+  } else if (player.state === 'crossover') {
+    // Quick run cycle still going; ball whips low across body from right→left
     const swing = Math.sin(t) * 0.95;
-    const armSwing = Math.sin(t) * 0.7;
-    legLx =  swing;
-    legRx = -swing;
-    // bend the back-swinging knee
+    const armSwing = Math.sin(t) * 0.6;
+    legLx =  swing; legRx = -swing;
     kneeLx = Math.max(0, -swing) * 1.4;
     kneeRx = Math.max(0,  swing) * 1.4;
+    bodyTilt = -0.05;
+    playerObj.bodyHolder.rotation.x = bodyTilt;
+    bodyTwistY = -0.18; // twist toward left
+
+    const k = 1 - Math.max(0, player.stateTimer / LANE_CHANGE_TIME); // 0 → 1 over animation
+    const arc = Math.sin(k * Math.PI);
+    ballX = 0.7 - 1.5 * k;          // sweeps right → left
+    ballY = 0.5 - arc * 0.25;       // dips low at midpoint
+    ballZ = 0.20;
+    // Right arm extends low/across, left arm catches
+    armRx = -0.6 - arc * 0.6;
+    armLx = -0.4 - arc * 0.4;
+    elbowRx = 1.3;
+    elbowLx = 0.9;
+  } else if (player.state === 'behindback') {
+    // Ball arcs BEHIND the player from left → right
+    const swing = Math.sin(t) * 0.95;
+    legLx =  swing; legRx = -swing;
+    kneeLx = Math.max(0, -swing) * 1.4;
+    kneeRx = Math.max(0,  swing) * 1.4;
+    bodyTilt = -0.05;
+    playerObj.bodyHolder.rotation.x = bodyTilt;
+    bodyTwistY = 0.20; // twist slightly right
+
+    const k = 1 - Math.max(0, player.stateTimer / LANE_CHANGE_TIME);
+    const arc = Math.sin(k * Math.PI);
+    ballX = -0.7 + 1.5 * k;
+    ballY = 0.95 + arc * 0.15;
+    // Goes BEHIND the body: in local frame, behind = +Z (since player rotated 180°,
+    // local +Z is world -Z which is behind from camera POV). But we want it visually
+    // BEHIND the player's torso in their own frame. Player's back is local -Z (since
+    // before rotation eyes were at +Z; back is -Z). So ball arcs to local -Z = visible
+    // behind player from camera (camera at world +Z sees local -Z directly).
+    ballZ = 0.10 - arc * 0.55;
+    armLx = -0.5 - arc * 0.4;
+    armRx = -0.5 - arc * 0.4;
+    elbowLx = 1.0;
+    elbowRx = 1.0;
+  } else {
+    // running: legs swing opposite, arm pumps with dribble
+    const swing = Math.sin(t) * 0.95;
+    legLx =  swing;
+    legRx = -swing;
+    kneeLx = Math.max(0, -swing) * 1.4;
+    kneeRx = Math.max(0,  swing) * 1.4;
+
+    // Dribble: ball bounces between hand height and floor
+    const dribT = player.animTime * 7;
+    const bounce = Math.abs(Math.sin(dribT)); // 0 (low) → 1 (high)
+    ballX = 0.72;
+    ballY = 0.20 + bounce * 0.85;     // 0.20 (floor contact) → 1.05 (hand)
+    ballZ = 0.18;
+    // Right arm follows the ball: pushes down when ball is high, lifts as ball comes up
+    // arm shoulder rotation.x: negative pulls up (forward). 0 = hanging.
+    const armPump = -0.8 - 0.5 * Math.cos(dribT); // alternates: ~-0.3 (down) → ~-1.3 (up)
+    armRx = armPump;
+    elbowRx = 0.7 + 0.5 * Math.cos(dribT); // bend more when arm goes down
+    // Left arm: normal arm swing, opposite to right leg
+    const armSwing = Math.sin(t) * 0.55;
     armLx = -armSwing - 0.15;
-    armRx =  armSwing - 0.15;
-    elbowLx = 0.6 + Math.max(0,  armSwing) * 0.4;
-    elbowRx = 0.6 + Math.max(0, -armSwing) * 0.4;
+    elbowLx = 0.55 + Math.max(0, armSwing) * 0.4;
+
+    // Soft dribble click on each impact (bottom of bounce)
+    if (player._lastBounce === undefined) player._lastBounce = bounce;
+    if (state === STATE.PLAYING && player._lastBounce > 0.18 && bounce < 0.18) sfx.dribble();
+    player._lastBounce = bounce;
+
     bodyTilt = Math.abs(Math.sin(t)) * -0.04 - 0.05;
     playerObj.bodyHolder.rotation.x = bodyTilt;
   }
 
-  // Apply
+  // Apply joint rotations
   setRotXSafe(playerObj.legL.hip,  legLx);
   setRotXSafe(playerObj.legR.hip,  legRx);
   setRotXSafe(playerObj.legL.knee, kneeLx);
@@ -1159,6 +1375,15 @@ function animatePlayer(dt) {
   setRotXSafe(playerObj.armR.shoulder, armRx);
   setRotXSafe(playerObj.armL.elbow, elbowLx);
   setRotXSafe(playerObj.armR.elbow, elbowRx);
+
+  // Ball position
+  if (playerObj.ballGroup) {
+    playerObj.ballGroup.position.set(ballX, ballY, ballZ);
+    playerObj.ballGroup.visible = ballVisible;
+  }
+
+  // Body twist (Y) — used during crossover/behindback for character flair
+  playerObj.bodyHolder.rotation.y = bodyTwistY;
 
   // Body bob (vertical only) for run
   let bob = 0;
@@ -1184,7 +1409,7 @@ function animatePlayer(dt) {
   playerObj.root.position.x = player.x;
 
   // Ball spin
-  playerObj.ball.rotation.x += dt * 9;
+  playerObj.ball.rotation.x += dt * 11;
   playerObj.ball.rotation.y += dt * 5;
   playerObj.seam.rotation.z += dt * 4;
   playerObj.seam2.rotation.x += dt * 4;
@@ -1347,6 +1572,7 @@ function update(dt) {
       if (!evaded) {
         if (power.shield > 0) {
           power.shield = 0;
+          sfx.shield();
           // shield-pop effect
           const px = player.x, py = 1.4, pz = 0;
           for (let i = 0; i < 22; i++) {
@@ -1385,6 +1611,7 @@ function update(dt) {
       coins += 1;
       totalCoins += 1;
       score += 10 * (power.multi > 0 ? 2 : 1);
+      sfx.coin();
       // sparkle
       const cx = c.mesh.position.x, cy = c.mesh.position.y, cz = c.mesh.position.z;
       for (let i = 0; i < 5; i++) {
@@ -1489,13 +1716,14 @@ function powerupColorString(kind) {
 
 function activatePowerup(kind) {
   switch (kind) {
-    case 'magnet': power.magnet = 8; break;
-    case 'multi':  power.multi  = 10; break;
-    case 'shield': power.shield = 999; break;
+    case 'magnet': power.magnet = 8; sfx.power(); break;
+    case 'multi':  power.multi  = 10; sfx.power(); break;
+    case 'shield': power.shield = 999; sfx.power(); break;
     case 'rocket':
       power.rocket = 5;
       player.state = 'rocket';
       player.vy = 0;
+      sfx.rocket();
       break;
   }
   refreshPowerupHUD();
@@ -1504,18 +1732,25 @@ function activatePowerup(kind) {
 /* =============================================================
  * 15. Input
  * ============================================================= */
-function setLane(targetLane) {
+function swipeLeft() {
   if (state !== STATE.PLAYING) return;
-  targetLane = Math.max(0, Math.min(2, targetLane));
-  if (targetLane === player.lane) return;
-  player.lane = targetLane;
   if (player.state === 'slide' || player.state === 'dunk' || player.state === 'rocket') return;
+  // Move to left lane (if possible) and play crossover animation either way
+  if (player.lane > 0) player.lane -= 1;
   player.state = 'crossover';
   player.stateTimer = LANE_CHANGE_TIME;
+  sfx.crossover();
 }
 
-function swipeLeft()  { setLane(player.lane - 1); }
-function swipeRight() { setLane(player.lane + 1); }
+function swipeRight() {
+  if (state !== STATE.PLAYING) return;
+  if (player.state === 'slide' || player.state === 'dunk' || player.state === 'rocket') return;
+  if (player.lane < 2) player.lane += 1;
+  player.state = 'behindback';
+  player.stateTimer = LANE_CHANGE_TIME;
+  sfx.behindback();
+}
+
 function swipeUp() {
   if (state !== STATE.PLAYING) return;
   if (player.state === 'dunk' || player.state === 'rocket') return;
@@ -1523,12 +1758,15 @@ function swipeUp() {
   player.vy = JUMP_VY;
   player.y = 0.01;
   player.stateTimer = 0;
+  sfx.jump();
 }
+
 function swipeDown() {
   if (state !== STATE.PLAYING) return;
   if (player.state === 'dunk' || player.state === 'rocket') return;
   player.state = 'slide';
   player.stateTimer = SLIDE_TIME;
+  sfx.slide();
 }
 
 let touchStart = null;
@@ -1658,6 +1896,7 @@ function showMenu(view) {
 function renderSkinGrid() {
   skinsCoinsEl.textContent = totalCoins;
   skinGridEl.innerHTML = '';
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   for (const s of SKINS) {
     const isUnlocked = unlockedSkins.includes(s.id);
     const isEquipped = currentSkinId === s.id;
@@ -1666,10 +1905,12 @@ function renderSkinGrid() {
 
     const previewCanvas = document.createElement('canvas');
     previewCanvas.className = 'skin-preview';
-    previewCanvas.width = 140;
-    previewCanvas.height = 140;
+    // Render at 2× display resolution for sharpness on mobile
+    const displaySize = 180;
+    previewCanvas.width  = displaySize * dpr;
+    previewCanvas.height = displaySize * dpr;
     card.appendChild(previewCanvas);
-    drawSkinPreview(previewCanvas, s);
+    drawSkinPreview(previewCanvas, s, dpr);
 
     const name = document.createElement('div');
     name.className = 'skin-name';
@@ -1691,11 +1932,13 @@ function renderSkinGrid() {
     card.appendChild(status);
 
     card.addEventListener('click', () => {
+      ensureAudio();
       if (isEquipped) return;
       if (isUnlocked) {
         currentSkinId = s.id;
         applySkin(s);
         saveProgress();
+        sfx.click();
         renderSkinGrid();
       } else if (totalCoins >= s.cost) {
         totalCoins -= s.cost;
@@ -1703,8 +1946,10 @@ function renderSkinGrid() {
         currentSkinId = s.id;
         applySkin(s);
         saveProgress();
+        sfx.power();
         renderSkinGrid();
       } else {
+        sfx.crossover();
         skinsCoinsEl.parentElement.animate(
           [{ transform: 'translateX(-6px)' }, { transform: 'translateX(6px)' }, { transform: 'translateX(0)' }],
           { duration: 250 },
@@ -1716,20 +1961,36 @@ function renderSkinGrid() {
 }
 
 /* 2D-canvas skin preview (kept from the original game) */
-function drawSkinPreview(canvas, skin) {
+function drawSkinPreview(canvas, skin, dpr) {
   const c = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
+  const w = canvas.width / (dpr || 1);
+  const h = canvas.height / (dpr || 1);
+  c.setTransform(dpr || 1, 0, 0, dpr || 1, 0, 0);
   c.clearRect(0, 0, w, h);
+  // Background gradient (sunny day)
   const bg = c.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0, '#a8dcff');
-  bg.addColorStop(1, '#fff5d0');
+  bg.addColorStop(0,    '#9bd0ff');
+  bg.addColorStop(0.55, '#dcefff');
+  bg.addColorStop(1,    '#fff5d8');
   c.fillStyle = bg;
   c.fillRect(0, 0, w, h);
-  c.fillStyle = '#5a606a';
-  c.fillRect(0, h * 0.78, w, h * 0.22);
+  // Sun
+  const sg = c.createRadialGradient(w * 0.82, h * 0.22, 4, w * 0.82, h * 0.22, w * 0.32);
+  sg.addColorStop(0, 'rgba(255, 245, 200, 1)');
+  sg.addColorStop(0.4, 'rgba(255, 220, 150, 0.5)');
+  sg.addColorStop(1, 'rgba(255, 220, 150, 0)');
+  c.fillStyle = sg;
+  c.fillRect(0, 0, w, h);
+  // Floor shadow
+  c.fillStyle = 'rgba(40,60,80,0.18)';
+  c.beginPath();
+  c.ellipse(w / 2, h * 0.93, w * 0.36, w * 0.045, 0, 0, Math.PI * 2);
+  c.fill();
+  // Player figure — properly scaled to canvas size
   c.save();
-  c.translate(w / 2, h * 0.86);
-  c.scale(0.6, 0.6);
+  c.translate(w / 2, h * 0.92);
+  const figureScale = h / 230; // figure is ~210 tall in local coords
+  c.scale(figureScale, figureScale);
   drawPreviewBody(c, skin);
   c.restore();
 }
@@ -1818,14 +2079,198 @@ function refreshPowerupHUD() {
 }
 
 /* =============================================================
+ * 18.5 Setup dialog (name + jersey number) — first launch + edit
+ * ============================================================= */
+const setupEl       = document.getElementById('setup');
+const setupNameEl   = document.getElementById('setup-name');
+const setupNumberEl = document.getElementById('setup-number');
+const setupErrorEl  = document.getElementById('setup-error');
+const setupSaveBtn  = document.getElementById('setup-save');
+const setupCancelBtn = document.getElementById('setup-cancel');
+const profileBtnEl  = document.getElementById('profile-btn');
+const chipNameEl    = document.getElementById('chip-name');
+const chipNumEl     = document.getElementById('chip-num');
+
+function updateChip() {
+  if (chipNameEl) chipNameEl.textContent = (playerName || 'SPIELER').toUpperCase();
+  if (chipNumEl)  chipNumEl.textContent  = '#' + (playerNumber || '0');
+}
+
+function showSetup(allowCancel) {
+  setupNameEl.value   = playerName || '';
+  setupNumberEl.value = playerNumber || '23';
+  setupErrorEl.textContent = '';
+  setupCancelBtn.classList.toggle('hidden', !allowCancel);
+  // hide everything else
+  menuEl.classList.add('hidden');
+  skinsEl.classList.add('hidden');
+  howtoEl.classList.add('hidden');
+  if (tutorialEl) tutorialEl.classList.add('hidden');
+  setupEl.classList.remove('hidden');
+}
+
+function hideSetup() { setupEl.classList.add('hidden'); }
+
+if (setupSaveBtn) {
+  setupSaveBtn.addEventListener('click', () => {
+    ensureAudio();
+    sfx.click();
+    const n = setupNameEl.value.trim().slice(0, 12);
+    const numStr = setupNumberEl.value.trim();
+    const num = parseInt(numStr, 10);
+    if (!n) {
+      setupErrorEl.textContent = 'Bitte gib einen Namen ein';
+      return;
+    }
+    if (!Number.isFinite(num) || num < 0 || num > 99) {
+      setupErrorEl.textContent = 'Trikotnummer 0–99 bitte';
+      return;
+    }
+    playerName   = n.toUpperCase();
+    playerNumber = String(num);
+    saveProfile();
+    updateNumberTexture();
+    updateChip();
+    hideSetup();
+    if (!tutorialDone) {
+      showTutorial();
+    } else {
+      showMenu('main');
+    }
+  });
+}
+
+if (setupCancelBtn) {
+  setupCancelBtn.addEventListener('click', () => {
+    sfx.click();
+    hideSetup();
+    showMenu('main');
+  });
+}
+
+if (profileBtnEl) {
+  profileBtnEl.addEventListener('click', () => {
+    ensureAudio();
+    sfx.click();
+    showSetup(true);
+  });
+}
+
+/* =============================================================
+ * 18.6 Tutorial — first launch + How-To button
+ * ============================================================= */
+const tutorialEl = document.getElementById('tutorial');
+const tutTitleEl = document.getElementById('tut-title');
+const tutTextEl  = document.getElementById('tut-text');
+const tutArrowEl = document.getElementById('tut-arrow');
+const tutProgressEl = document.getElementById('tut-progress');
+const tutNextBtn = document.getElementById('tut-next');
+const tutSkipBtn = document.getElementById('tut-skip');
+const howtoTutorialBtn = document.getElementById('howto-tutorial');
+
+const TUTORIAL_STEPS = [
+  { title: 'CROSSOVER',       text: 'Wische nach LINKS, um einen Crossover zu spielen und in die linke Lane zu wechseln.', arrow: 'left'  },
+  { title: 'BEHIND-THE-BACK', text: 'Wische nach RECHTS für einen Behind-the-back und wechsle in die rechte Lane.',         arrow: 'right' },
+  { title: 'DUNK / SPRUNG',   text: 'Wische nach OBEN, um zu springen oder zu dunken — fliegt über Cones, Tonnen und Defender.', arrow: 'up'   },
+  { title: 'SLIDE',           text: 'Wische nach UNTEN für einen Slide unter den Hürden durch.',                            arrow: 'down'  },
+  { title: 'COINS & POWER-UPS', text: 'Sammle Coins für neue Skins! Greif dir Power-Ups: Magnet · ×2 · Shield · Rocket.',   arrow: 'down'  },
+];
+let tutStep = 0;
+
+function renderTutStep() {
+  if (!tutorialEl) return;
+  const step = TUTORIAL_STEPS[tutStep];
+  tutTitleEl.textContent = step.title;
+  tutTextEl.textContent  = step.text;
+  tutArrowEl.classList.remove('left','right','up','down');
+  tutArrowEl.classList.add(step.arrow);
+  tutProgressEl.innerHTML = '';
+  for (let i = 0; i < TUTORIAL_STEPS.length; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'dot' + (i === tutStep ? ' active' : '');
+    tutProgressEl.appendChild(dot);
+  }
+  tutNextBtn.textContent = (tutStep === TUTORIAL_STEPS.length - 1) ? 'LOS GEHTS!' : 'WEITER';
+}
+
+function showTutorial() {
+  if (!tutorialEl) { showMenu('main'); return; }
+  tutStep = 0;
+  renderTutStep();
+  menuEl.classList.add('hidden');
+  setupEl.classList.add('hidden');
+  howtoEl.classList.add('hidden');
+  tutorialEl.classList.remove('hidden');
+}
+
+function finishTutorial() {
+  tutorialDone = true;
+  localStorage.setItem('hr_tutorial_done', 'true');
+  if (tutorialEl) tutorialEl.classList.add('hidden');
+  showMenu('main');
+}
+
+if (tutNextBtn) {
+  tutNextBtn.addEventListener('click', () => {
+    ensureAudio();
+    sfx.click();
+    tutStep += 1;
+    if (tutStep >= TUTORIAL_STEPS.length) finishTutorial();
+    else renderTutStep();
+  });
+}
+if (tutSkipBtn) {
+  tutSkipBtn.addEventListener('click', () => {
+    sfx.click();
+    finishTutorial();
+  });
+}
+if (howtoTutorialBtn) {
+  howtoTutorialBtn.addEventListener('click', () => {
+    ensureAudio();
+    sfx.click();
+    howtoEl.classList.add('hidden');
+    showTutorial();
+  });
+}
+
+/* =============================================================
+ * 18.7 Mute button
+ * ============================================================= */
+const muteBtnEl = document.getElementById('mute-btn');
+const soundOnIcon  = document.getElementById('sound-on');
+const soundOffIcon = document.getElementById('sound-off');
+
+function updateMuteIcon() {
+  if (!soundOnIcon || !soundOffIcon) return;
+  soundOnIcon.style.display  = muted ? 'none' : 'block';
+  soundOffIcon.style.display = muted ? 'block' : 'none';
+}
+updateMuteIcon();
+
+if (muteBtnEl) {
+  muteBtnEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    muted = !muted;
+    localStorage.setItem('hr_muted', String(muted));
+    updateMuteIcon();
+    if (!muted) { ensureAudio(); sfx.click(); }
+  });
+}
+
+/* =============================================================
  * 19. Game lifecycle
  * ============================================================= */
 function startGame() {
+  ensureAudio();
+  sfx.click();
   reset();
   state = STATE.PLAYING;
   menuEl.classList.add('hidden');
   skinsEl.classList.add('hidden');
   howtoEl.classList.add('hidden');
+  if (tutorialEl) tutorialEl.classList.add('hidden');
+  if (setupEl) setupEl.classList.add('hidden');
   gameOverEl.classList.add('hidden');
   pauseEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
@@ -1836,6 +2281,7 @@ function startGame() {
 
 function gameOver() {
   state = STATE.OVER;
+  sfx.crash();
   const finalScore = Math.floor(score);
   if (finalScore > highScore) highScore = finalScore;
   saveProgress();
@@ -1864,5 +2310,15 @@ function gameOver() {
 /* =============================================================
  * 20. Boot
  * ============================================================= */
-showMenu('main');
+updateChip();
+
+if (!isProfileSet()) {
+  // First-ever launch: ask for name + jersey number, then run tutorial, then menu
+  showSetup(false);
+} else if (!tutorialDone) {
+  showTutorial();
+} else {
+  showMenu('main');
+}
+
 requestAnimationFrame(loop);
