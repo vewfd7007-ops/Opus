@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+  />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0a0518" />
+  <title>Basketball Runs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- HUD -->
+  <div id="hud" class="hud hidden">
+    <div class="score-display">
+      <span class="score-label">SCORE</span>
+      <span id="score">0</span>
+    </div>
+  </div>
+
+  <!-- Start menu -->
+  <div id="menu" class="overlay">
+    <div class="logo">
+      <div class="logo-circle">
+        <svg viewBox="0 0 100 100" width="120" height="120" aria-hidden="true">
+          <circle cx="50" cy="50" r="46" fill="#ff6b1a" stroke="#1a0a00" stroke-width="3" />
+          <path d="M 4 50 Q 50 50 96 50" stroke="#1a0a00" stroke-width="3" fill="none" />
+          <path d="M 50 4 Q 50 50 50 96" stroke="#1a0a00" stroke-width="3" fill="none" />
+          <path d="M 14 18 Q 50 50 86 18" stroke="#1a0a00" stroke-width="3" fill="none" />
+          <path d="M 14 82 Q 50 50 86 82" stroke="#1a0a00" stroke-width="3" fill="none" />
+        </svg>
+      </div>
+      <h1>BASKETBALL<br /><span>RUNS</span></h1>
+    </div>
+
+    <button id="play-btn" class="btn">PLAY</button>
+
+    <div class="instructions">
+      <div class="row"><span class="swipe">&#8592;</span> Crossover</div>
+      <div class="row"><span class="swipe">&#8594;</span> Behind-the-back</div>
+      <div class="row"><span class="swipe">&#8593;</span> Dunk / Sprung</div>
+      <div class="row"><span class="swipe">&#8595;</span> Slide</div>
+    </div>
+    <div class="hint">Swipe on phone &middot; Arrow keys / WASD on desktop</div>
+  </div>
+
+  <!-- Game over -->
+  <div id="gameover" class="overlay hidden">
+    <h2>GAME OVER</h2>
+    <div class="final-score">
+      <div>SCORE</div>
+      <div id="final-score-val">0</div>
+    </div>
+    <div class="high-score">Best: <span id="high-score-val">0</span></div>
+    <button id="retry-btn" class="btn">RETRY</button>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
