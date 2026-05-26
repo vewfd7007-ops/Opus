@@ -8,19 +8,32 @@
   />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="theme-color" content="#0a0518" />
-  <title>Basketball Runs</title>
+  <meta name="theme-color" content="#7ec8ff" />
+  <title>Hoop Rush</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <canvas id="game"></canvas>
 
-  <!-- HUD -->
+  <!-- HUD (in-game) -->
   <div id="hud" class="hud hidden">
+    <div class="hud-left">
+      <button id="pause-btn" class="icon-btn" aria-label="Pause">
+        <svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1" fill="#fff"/><rect x="14" y="5" width="4" height="14" rx="1" fill="#fff"/></svg>
+      </button>
+    </div>
     <div class="score-display">
       <span class="score-label">SCORE</span>
       <span id="score">0</span>
     </div>
+    <div class="hud-right">
+      <div class="coin-display">
+        <div class="coin-icon"></div>
+        <span id="coin-count">0</span>
+      </div>
+    </div>
+    <!-- Active power-up indicators -->
+    <div id="powerups" class="powerups"></div>
   </div>
 
   <!-- Start menu -->
@@ -28,25 +41,75 @@
     <div class="logo">
       <div class="logo-circle">
         <svg viewBox="0 0 100 100" width="120" height="120" aria-hidden="true">
-          <circle cx="50" cy="50" r="46" fill="#ff6b1a" stroke="#1a0a00" stroke-width="3" />
-          <path d="M 4 50 Q 50 50 96 50" stroke="#1a0a00" stroke-width="3" fill="none" />
-          <path d="M 50 4 Q 50 50 50 96" stroke="#1a0a00" stroke-width="3" fill="none" />
-          <path d="M 14 18 Q 50 50 86 18" stroke="#1a0a00" stroke-width="3" fill="none" />
-          <path d="M 14 82 Q 50 50 86 82" stroke="#1a0a00" stroke-width="3" fill="none" />
+          <circle cx="50" cy="50" r="46" fill="#ff8c3a" stroke="#3a1a08" stroke-width="3" />
+          <path d="M 4 50 Q 50 50 96 50" stroke="#3a1a08" stroke-width="3" fill="none" />
+          <path d="M 50 4 Q 50 50 50 96" stroke="#3a1a08" stroke-width="3" fill="none" />
+          <path d="M 14 18 Q 50 50 86 18" stroke="#3a1a08" stroke-width="3" fill="none" />
+          <path d="M 14 82 Q 50 50 86 82" stroke="#3a1a08" stroke-width="3" fill="none" />
         </svg>
       </div>
-      <h1>BASKETBALL<br /><span>RUNS</span></h1>
+      <h1>HOOP<span>RUSH</span></h1>
+      <div class="subtitle">3-LANE STREET RUNNER</div>
     </div>
 
-    <button id="play-btn" class="btn">PLAY</button>
+    <button id="play-btn" class="btn btn-primary">PLAY</button>
 
+    <div class="menu-row">
+      <button id="skins-btn" class="btn btn-secondary">
+        <span class="btn-icon">👕</span> SKINS
+      </button>
+      <button id="howto-btn" class="btn btn-secondary">
+        <span class="btn-icon">?</span> HOW TO
+      </button>
+    </div>
+
+    <div class="menu-stats">
+      <div class="stat">
+        <div class="stat-label">BEST</div>
+        <div class="stat-value" id="menu-best">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">COINS</div>
+        <div class="stat-value coin-value" id="menu-coins">0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Skins -->
+  <div id="skins" class="overlay hidden">
+    <h2>SKINS</h2>
+    <div class="skins-coins">
+      <div class="coin-icon"></div>
+      <span id="skins-coin-count">0</span>
+    </div>
+    <div class="skin-grid" id="skin-grid"></div>
+    <button id="skins-back" class="btn btn-secondary">BACK</button>
+  </div>
+
+  <!-- How to play -->
+  <div id="howto" class="overlay hidden">
+    <h2>HOW TO PLAY</h2>
     <div class="instructions">
-      <div class="row"><span class="swipe">&#8592;</span> Crossover</div>
-      <div class="row"><span class="swipe">&#8594;</span> Behind-the-back</div>
-      <div class="row"><span class="swipe">&#8593;</span> Dunk / Sprung</div>
-      <div class="row"><span class="swipe">&#8595;</span> Slide</div>
+      <div class="row"><span class="swipe">&#8592;</span> Swipe links — Lane wechseln</div>
+      <div class="row"><span class="swipe">&#8594;</span> Swipe rechts — Lane wechseln</div>
+      <div class="row"><span class="swipe">&#8593;</span> Swipe hoch — Sprung / Dunk</div>
+      <div class="row"><span class="swipe">&#8595;</span> Swipe runter — Slide</div>
     </div>
-    <div class="hint">Swipe on phone &middot; Arrow keys / WASD on desktop</div>
+    <div class="powerup-list">
+      <div class="pu-item"><span class="pu-dot magnet"></span> Magnet — zieht Coins an</div>
+      <div class="pu-item"><span class="pu-dot multi"></span> 2× Score</div>
+      <div class="pu-item"><span class="pu-dot shield"></span> Shield — rettet 1× vor Crash</div>
+      <div class="pu-item"><span class="pu-dot rocket"></span> Rocket — fliege über Hindernisse</div>
+    </div>
+    <div class="hint">Phone: Swipe &middot; Desktop: Pfeiltasten / WASD &middot; ESC = Pause</div>
+    <button id="howto-back" class="btn btn-secondary">BACK</button>
+  </div>
+
+  <!-- Pause -->
+  <div id="pause" class="overlay hidden">
+    <h2>PAUSED</h2>
+    <button id="resume-btn" class="btn btn-primary">RESUME</button>
+    <button id="quit-btn" class="btn btn-secondary">QUIT</button>
   </div>
 
   <!-- Game over -->
@@ -56,8 +119,21 @@
       <div>SCORE</div>
       <div id="final-score-val">0</div>
     </div>
+    <div class="run-stats">
+      <div class="run-stat">
+        <div class="coin-icon small"></div>
+        <span id="run-coins-val">0</span>
+      </div>
+      <div class="run-stat">
+        <div class="run-label">DIST</div>
+        <span id="run-dist-val">0m</span>
+      </div>
+    </div>
     <div class="high-score">Best: <span id="high-score-val">0</span></div>
-    <button id="retry-btn" class="btn">RETRY</button>
+    <div class="menu-row">
+      <button id="retry-btn" class="btn btn-primary">RETRY</button>
+      <button id="home-btn" class="btn btn-secondary">HOME</button>
+    </div>
   </div>
 
   <script src="game.js"></script>
