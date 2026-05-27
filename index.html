@@ -65,11 +65,11 @@
     <div class="hint">Swipe on phone &middot; Arrow keys / WASD on desktop</div>
   </div>
 
-  <!-- Shop -->
+  <!-- Shop (Subway-Surfers style) -->
   <div id="shop" class="overlay shop-overlay hidden">
     <div class="shop-header">
       <button id="shop-back" class="icon-btn" aria-label="Back">&#8592;</button>
-      <h2 class="shop-title">SKINS</h2>
+      <h2 class="shop-title">CHARACTERS</h2>
       <div class="shop-coins">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
           <circle cx="12" cy="12" r="10" fill="#ffcc33" stroke="#9a6800" stroke-width="2"/>
@@ -79,10 +79,20 @@
       </div>
     </div>
 
-    <div id="skin-grid" class="skin-grid"></div>
+    <div class="shop-stage">
+      <button id="stage-prev" class="stage-arrow stage-arrow-left" aria-label="Previous">&#8249;</button>
+      <canvas id="preview-canvas"></canvas>
+      <button id="stage-next" class="stage-arrow stage-arrow-right" aria-label="Next">&#8250;</button>
+      <div class="stage-info">
+        <span id="stage-rarity" class="stage-rarity common">COMMON</span>
+        <h3 id="stage-name" class="stage-name">Rookie</h3>
+        <div id="stage-price" class="stage-price">EQUIPPED</div>
+      </div>
+    </div>
+
+    <div id="thumb-row" class="thumb-row"></div>
 
     <div class="shop-footer">
-      <div id="selected-skin-name" class="selected-name">Rookie</div>
       <button id="shop-action-btn" class="btn">EQUIPPED</button>
     </div>
   </div>
