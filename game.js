@@ -183,28 +183,28 @@ const GRAVITY = 2800;
 
 
 // =====================================================================
-// SPAWN PATTERNS  (defender rate reduced, real slide obstacle added)
+// SPAWN PATTERNS  (defender rate further reduced, slide obstacles emphasized)
 // =====================================================================
 function spawnPattern() {
   const r = Math.random();
   const dist = 1500;
 
   // Probabilities (sum = 1)
-  //  0.00 - 0.18  defender + hoop  (18%)
-  //  0.18 - 0.40  cone (single or double)  (22%)
-  //  0.40 - 0.62  lowbar slide  (22%)
+  //  0.00 - 0.10  defender + hoop  (10%)
+  //  0.10 - 0.34  cone (single or double)  (24%)
+  //  0.34 - 0.62  lowbar slide  (28%)
   //  0.62 - 0.74  banner overhead slide  (12%)
   //  0.74 - 0.93  ball pickups  (19%)
   //  0.93 - 1.00  combo balls + cone  (7%)
 
-  if (r < 0.18) {
+  if (r < 0.10) {
     // Defender with hoop behind him
     const lane = Math.random() < 0.5 ? 0 : 1;
     const def = { kind: 'defender', lane, d: dist, fallProgress: 0 };
-    const hoop = { kind: 'hoop', lane, d: dist + 220, scored: false };
+    const hoop = { kind: 'hoop', lane, d: dist + 240, scored: false };
     def.linkedHoop = hoop;
     obstacles.push(def, hoop);
-  } else if (r < 0.40) {
+  } else if (r < 0.34) {
     // Cone(s) - jump over
     const both = Math.random() < 0.18;
     if (both) {
@@ -259,6 +259,7 @@ function reset() {
   player.dunkPhase = 0;
   player.dunkTarget = null;
   player.dunkHoop = null;
+  player.dunkPunched = false;
   obstacles = [];
   collectibles = [];
   particles = [];
@@ -302,6 +303,26 @@ function update(dt) {
           x: dx + (Math.random() - 0.5) * 40, y: dy,
           vx: (Math.random() - 0.5) * 200, vy: -Math.random() * 120,
           life: 0.4, maxLife: 0.4, color: '#d9a574',
+        });
+      }
+    }
+
+    // POSTERIZE flash when player passes over defender (~0.50)
+    if (player.dunkTarget && !player.dunkPunched && p >= 0.5) {
+      player.dunkPunched = true;
+      const dscale = getScale(Math.max(0, player.dunkTarget.d));
+      const dx = laneXAt(player.dunkTarget.lane, Math.max(0, player.dunkTarget.d));
+      const dy = projectY(Math.max(0, player.dunkTarget.d)) - 110 * dscale;
+      // Big radial burst
+      for (let i = 0; i < 28; i++) {
+        const ang = (i / 28) * Math.PI * 2 + Math.random() * 0.2;
+        const sp = 380 + Math.random() * 320;
+        particles.push({
+          x: dx, y: dy,
+          vx: Math.cos(ang) * sp,
+          vy: Math.sin(ang) * sp - 60,
+          life: 0.55, maxLife: 0.55,
+          color: ['#ffffff', '#ffcc33', '#ff6b1a'][i % 3],
         });
       }
     }
@@ -375,8 +396,8 @@ function update(dt) {
   distance += speed;
   score += speed * dt * 2.2;
 
-  // Smooth lane interpolation with ease-out
-  player.laneSwitchT = Math.min(1, player.laneSwitchT + dt * 6.5);
+  // Smooth lane interpolation with snappy ease-out cubic (Subway Surfers-style juke)
+  player.laneSwitchT = Math.min(1, player.laneSwitchT + dt * 9);
   const tEased = 1 - Math.pow(1 - player.laneSwitchT, 3); // ease-out cubic
   player.visualLane = player.prevLane + (player.lane - player.prevLane) * tEased;
 
@@ -526,6 +547,7 @@ function swipeUp() {
     // start dunk attack
     player.state = 'dunkAttack';
     player.dunkPhase = 0;
+    player.dunkPunched = false;
     player.dunkTarget = trigger;
     player.dunkHoop = trigger.linkedHoop;
     player.dunkStartLane = player.visualLane;
@@ -717,6 +739,8 @@ function drawObstacle(o) {
 
 function drawDefender(x, y, scale, o) {
   const fall = o ? (o.fallProgress || 0) : 0;
+  // approachT: 0 when far (d>=520), 1 when close (d<=120)
+  const approachT = o ? Math.max(0, Math.min(1, (520 - Math.max(0, o.d)) / 400)) : 0;
   const h = 200 * scale;
   const w = 56 * scale;
 
@@ -744,18 +768,26 @@ function drawDefender(x, y, scale, o) {
         drawStar(sx, sy, 5 * scale);
       }
     }
+  } else {
+    // Defensive crouch + bob as player approaches
+    const crouch = approachT * 5 * scale;
+    const bob = Math.sin(player.animTime * 9) * approachT * 1.5 * scale;
+    ctx.translate(0, crouch + bob);
   }
+
+  // Wider defensive stance when blocking
+  const stance = 1 + approachT * 0.30 * (1 - fall);
 
   // legs (shorts)
   ctx.fillStyle = '#1a3a8a';
-  ctx.fillRect(-w * 0.4, -h * 0.45, w * 0.3, h * 0.2);
-  ctx.fillRect(w * 0.1, -h * 0.45, w * 0.3, h * 0.2);
+  ctx.fillRect(-w * 0.4 * stance, -h * 0.45, w * 0.3, h * 0.2);
+  ctx.fillRect(w * 0.1 * stance, -h * 0.45, w * 0.3, h * 0.2);
   ctx.fillStyle = '#5a3520';
-  ctx.fillRect(-w * 0.36, -h * 0.25, w * 0.22, h * 0.22);
-  ctx.fillRect(w * 0.14, -h * 0.25, w * 0.22, h * 0.22);
+  ctx.fillRect(-w * 0.36 * stance, -h * 0.25, w * 0.22, h * 0.22);
+  ctx.fillRect(w * 0.14 * stance, -h * 0.25, w * 0.22, h * 0.22);
   ctx.fillStyle = '#fff';
-  ctx.fillRect(-w * 0.42, -4 * scale, w * 0.32, 8 * scale);
-  ctx.fillRect(w * 0.1, -4 * scale, w * 0.32, 8 * scale);
+  ctx.fillRect(-w * 0.42 * stance, -4 * scale, w * 0.32, 8 * scale);
+  ctx.fillRect(w * 0.1 * stance, -4 * scale, w * 0.32, 8 * scale);
 
   // jersey
   const jg = ctx.createLinearGradient(0, -h, 0, -h * 0.45);
@@ -775,42 +807,66 @@ function drawDefender(x, y, scale, o) {
   ctx.textBaseline = 'middle';
   ctx.fillText('23', 0, -h * 0.6);
 
-  // ARMS - block-up pose. As player approaches, raise higher.
-  // If fall > 0, arms drop to sides.
-  const armRaise = Math.max(0, 1 - Math.max(0, fall * 1.4));
-  const armY = -h * (0.78 + 0.12 * armRaise);
+  // ARMS - block-up pose. Higher and wider as player approaches.
+  // 0.35 reach when far, 1.0 reach when very close. Falls drop to 0.
+  const armReach = Math.max(0, (0.35 + approachT * 0.65) * (1 - fall * 1.4));
+  const armSpread = 1 + approachT * 0.40 * (1 - fall);
+  const armY = -h * (0.55 + 0.40 * armReach);
   ctx.fillStyle = '#5a3520';
   // upper arm
-  ctx.fillRect(-w * 1.05, armY, w * 0.3, w * 0.22);
-  ctx.fillRect(w * 0.75, armY, w * 0.3, w * 0.22);
+  ctx.fillRect(-w * 1.05 * armSpread, armY, w * 0.3, w * 0.22);
+  ctx.fillRect(w * 0.75 * armSpread, armY, w * 0.3, w * 0.22);
   // hands
   ctx.beginPath();
-  ctx.arc(-w * 1.1, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
-  ctx.arc(w * 1.1, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
+  ctx.arc(-w * 1.1 * armSpread, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
+  ctx.arc(w * 1.1 * armSpread, armY + w * 0.11, w * 0.18, 0, Math.PI * 2);
   ctx.fill();
 
-  // head
+  // head (slight upward tilt while blocking high)
+  const headY = -h * (0.88 + 0.04 * armReach);
   ctx.fillStyle = '#5a3520';
   ctx.beginPath();
-  ctx.arc(0, -h * 0.88, w * 0.32, 0, Math.PI * 2);
+  ctx.arc(0, headY, w * 0.32, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = '#1a0e08';
   ctx.beginPath();
-  ctx.arc(0, -h * 0.92, w * 0.32, Math.PI, 0);
+  ctx.arc(0, headY - w * 0.04, w * 0.32, Math.PI, 0);
   ctx.fill();
-  // X eyes when fallen
+  // Eyes
   if (fall > 0.4) {
+    // X eyes when KO'd
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2 * scale;
-    const eyeY = -h * 0.88;
     [-w * 0.12, w * 0.12].forEach((ex) => {
       ctx.beginPath();
-      ctx.moveTo(ex - 4 * scale, eyeY - 4 * scale);
-      ctx.lineTo(ex + 4 * scale, eyeY + 4 * scale);
-      ctx.moveTo(ex + 4 * scale, eyeY - 4 * scale);
-      ctx.lineTo(ex - 4 * scale, eyeY + 4 * scale);
+      ctx.moveTo(ex - 4 * scale, headY - 4 * scale);
+      ctx.lineTo(ex + 4 * scale, headY + 4 * scale);
+      ctx.moveTo(ex + 4 * scale, headY - 4 * scale);
+      ctx.lineTo(ex - 4 * scale, headY + 4 * scale);
       ctx.stroke();
     });
+  } else if (approachT > 0.5) {
+    // Wide panic eyes when player is close
+    ctx.fillStyle = '#fff';
+    [-w * 0.13, w * 0.13].forEach((ex) => {
+      ctx.beginPath();
+      ctx.arc(ex, headY, 4.5 * scale, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.fillStyle = '#1a0e08';
+    [-w * 0.13, w * 0.13].forEach((ex) => {
+      ctx.beginPath();
+      ctx.arc(ex, headY, 2.2 * scale, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  } else {
+    // Normal alert eyes
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-w * 0.16, headY - 2.5 * scale, 5 * scale, 4 * scale);
+    ctx.fillRect(w * 0.16 - 5 * scale, headY - 2.5 * scale, 5 * scale, 4 * scale);
+    ctx.fillStyle = '#1a0e08';
+    ctx.fillRect(-w * 0.13, headY - 2 * scale, 3 * scale, 3 * scale);
+    ctx.fillRect(w * 0.13 - 3 * scale, headY - 2 * scale, 3 * scale, 3 * scale);
   }
 
   ctx.restore();
@@ -924,6 +980,8 @@ function drawLowBarSingle(x, y, scale) {
   ctx.fill();
   // candy striped bar
   drawStripedBar(x - w * 0.5, barY - 7 * scale, w, 14 * scale);
+  // SLIDE chevrons + label hovering above bar
+  drawSlideChevrons(x, barY - 22 * scale, scale);
 }
 
 function drawLowBarSpan(d, scale) {
@@ -941,6 +999,28 @@ function drawLowBarSpan(d, scale) {
   ctx.fillRect(left - 6 * scale, y - 100 * scale - 6 * scale, 10 * scale, 6 * scale);
   ctx.fillRect(right - 4 * scale, y - 100 * scale - 6 * scale, 10 * scale, 6 * scale);
   drawStripedBar(left, barY - 7 * scale, right - left, 14 * scale);
+  drawSlideChevrons((xL + xR) / 2, barY - 22 * scale, scale);
+}
+
+// Pulsing downward chevrons hint that a slide is required
+function drawSlideChevrons(x, y, scale) {
+  const pulse = 0.5 + 0.5 * Math.sin(player.animTime * 6);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = `rgba(255,204,51,${0.55 + 0.4 * pulse})`;
+  ctx.lineWidth = Math.max(2, 3 * scale);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (let i = 0; i < 3; i++) {
+    const oy = -i * 9 * scale + pulse * 3 * scale;
+    const ww = 14 * scale;
+    ctx.beginPath();
+    ctx.moveTo(-ww, oy);
+    ctx.lineTo(0, oy + 7 * scale);
+    ctx.lineTo(ww, oy);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawStripedBar(x, y, w, h) {
@@ -1063,22 +1143,30 @@ function drawPlayer() {
 
   const x = laneXAtVisual(player.visualLane, 0);
   const groundYpos = projectY(0);
-  const baseY = groundYpos + player.y;
+
+  // Snappy lane-switch HOP for that Subway Surfers juke
+  let switchHop = 0;
+  if (player.laneSwitchT < 1 && player.state !== 'jump' && player.state !== 'slide') {
+    switchHop = -Math.sin(player.laneSwitchT * Math.PI) * 22;
+  }
+  const baseY = groundYpos + player.y + switchHop;
 
   // Trail/echo when lane switching fast
   if (player.laneSwitchT < 1) {
     const switchT = player.laneSwitchT;
-    const echoes = 3;
+    const echoes = 4;
     for (let i = 1; i <= echoes; i++) {
-      const t = Math.max(0, switchT - i * 0.05);
+      const t = Math.max(0, switchT - i * 0.07);
       const eased = 1 - Math.pow(1 - t, 3);
       const echoLane = player.prevLane + (player.lane - player.prevLane) * eased;
       const ex = laneXAtVisual(echoLane, 0);
-      const alpha = (1 - t) * 0.18 - i * 0.04;
+      const ehop = -Math.sin(t * Math.PI) * 22;
+      const ey = groundYpos + ehop;
+      const alpha = Math.max(0, 0.32 - i * 0.07) * (1 - switchT * 0.55);
       if (alpha <= 0) continue;
       ctx.globalAlpha = alpha;
       ctx.save();
-      ctx.translate(ex, baseY);
+      ctx.translate(ex, ey);
       drawPlayerSilhouette(skin);
       ctx.restore();
       ctx.globalAlpha = 1;
@@ -1563,6 +1651,7 @@ function loop(now) {
   lastT = now;
   update(dt);
   render();
+  if (typeof renderShopFrame === 'function') renderShopFrame(dt);
   requestAnimationFrame(loop);
 }
 
@@ -1582,7 +1671,9 @@ const finalScoreEl = document.getElementById('final-score-val');
 const coinsEarnedEl = document.getElementById('coins-earned-val');
 const highScoreEl = document.getElementById('high-score-val');
 const skinGridEl = document.getElementById('skin-grid');
-const selectedSkinNameEl = document.getElementById('selected-skin-name');
+const heroPreviewEl = document.getElementById('hero-preview');
+const heroNameEl = document.getElementById('hero-name');
+const heroRarityEl = document.getElementById('hero-rarity');
 const shopActionBtn = document.getElementById('shop-action-btn');
 
 document.getElementById('play-btn').addEventListener('click', startGame);
@@ -1658,8 +1749,10 @@ function flashHud() {
 
 
 // =====================================================================
-// SHOP
+// SHOP  (Subway-Surfers-style: hero preview + grid + footer action)
 // =====================================================================
+let shopAnimT = 0;
+
 function openShop() {
   state = STATE.SHOP;
   selectedShopSkinId = equippedSkinId;
@@ -1675,6 +1768,7 @@ function closeShop() {
   refreshMenuCoins();
 }
 
+// Build mini cards in the grid
 function buildShop() {
   skinGridEl.innerHTML = '';
   for (const skin of SKINS) {
@@ -1687,34 +1781,38 @@ function buildShop() {
     const selected = skin.id === selectedShopSkinId;
 
     if (selected) card.classList.add('selected');
-    if (equipped) card.classList.add('equipped');
     if (!owned) card.classList.add('locked');
 
-    // Rarity tag
-    const rar = document.createElement('div');
-    rar.className = 'skin-rarity ' + skin.rarity;
-    rar.textContent = skin.rarity.toUpperCase();
-    card.appendChild(rar);
+    // Avatar canvas
+    const avatar = document.createElement('canvas');
+    avatar.className = 'avatar';
+    avatar.width = 132;
+    avatar.height = 176;
+    card.appendChild(avatar);
 
-    // Preview canvas
-    const preview = document.createElement('canvas');
-    preview.className = 'skin-preview';
-    preview.width = 180;
-    preview.height = 240;
-    card.appendChild(preview);
+    // Equipped tick
+    if (equipped) {
+      const tick = document.createElement('div');
+      tick.className = 'equipped-tick';
+      tick.textContent = '\u2713';
+      card.appendChild(tick);
+    }
 
-    const name = document.createElement('div');
-    name.className = 'skin-name';
-    name.textContent = skin.name;
-    card.appendChild(name);
+    // Lock icon when not owned
+    if (!owned) {
+      const lock = document.createElement('div');
+      lock.className = 'lock-icon';
+      lock.textContent = '\u{1F512}';
+      card.appendChild(lock);
+    }
 
+    // Price tag
     const price = document.createElement('div');
-    price.className = 'skin-price';
+    price.className = 'price-tag';
     if (owned) {
       price.classList.add('owned');
       price.textContent = equipped ? 'EQUIPPED' : 'OWNED';
     } else {
-      price.classList.add('locked');
       if (coins < skin.price) price.classList.add('cant-afford');
       const dot = document.createElement('span');
       dot.className = 'coin-dot';
@@ -1725,32 +1823,37 @@ function buildShop() {
     }
     card.appendChild(price);
 
-    card.addEventListener('click', () => selectShopSkin(skin.id));
+    // Rarity bar at the bottom
+    const rb = document.createElement('div');
+    rb.className = 'rarity-bar ' + skin.rarity;
+    card.appendChild(rb);
 
+    card.addEventListener('click', () => selectShopSkin(skin.id));
     skinGridEl.appendChild(card);
 
-    // draw preview after attach
-    drawSkinPreview(preview, skin, selected);
+    // Render avatar after attach
+    drawSkinAvatar(avatar, skin, owned);
   }
+
+  drawHeroPreview(true);
   refreshShopFooter();
 }
 
 function selectShopSkin(id) {
   selectedShopSkinId = id;
-  // refresh selection visuals
+  shopAnimT = 0; // little replay animation on select
   for (const el of skinGridEl.querySelectorAll('.skin-card')) {
-    const isSel = el.dataset.id === id;
-    el.classList.toggle('selected', isSel);
-    const skin = getSkin(el.dataset.id);
-    const previewCanvas = el.querySelector('.skin-preview');
-    if (previewCanvas) drawSkinPreview(previewCanvas, skin, isSel);
+    el.classList.toggle('selected', el.dataset.id === id);
   }
   refreshShopFooter();
+  drawHeroPreview(true);
 }
 
 function refreshShopFooter() {
   const skin = getSkin(selectedShopSkinId);
-  selectedSkinNameEl.textContent = skin.name;
+  heroNameEl.textContent = skin.name;
+  heroRarityEl.textContent = skin.rarity.toUpperCase();
+  heroRarityEl.className = 'hero-rarity ' + skin.rarity;
 
   shopActionBtn.classList.remove('btn-secondary', 'btn-gold');
   shopActionBtn.disabled = false;
@@ -1786,38 +1889,86 @@ function refreshShopFooter() {
   }
 }
 
-function drawSkinPreview(canvasEl, skin, highlight) {
+// Draw a single small avatar inside a grid card. Self-contained: never touches global ctx.
+function drawSkinAvatar(canvasEl, skin, owned) {
   const c = canvasEl.getContext('2d');
   const cw = canvasEl.width;
   const ch = canvasEl.height;
   c.clearRect(0, 0, cw, ch);
 
-  // background
-  const bg = c.createLinearGradient(0, 0, 0, ch);
-  if (highlight) {
-    bg.addColorStop(0, 'rgba(255,204,51,0.18)');
-    bg.addColorStop(1, 'rgba(255,107,26,0.08)');
-  } else {
-    bg.addColorStop(0, 'rgba(255,107,26,0.08)');
-    bg.addColorStop(1, 'rgba(255,107,26,0.02)');
-  }
-  c.fillStyle = bg;
-  c.fillRect(0, 0, cw, ch);
-
-  // floor
-  c.fillStyle = 'rgba(0,0,0,0.18)';
+  // Soft floor shadow
+  c.fillStyle = 'rgba(0, 0, 0, 0.28)';
   c.beginPath();
-  c.ellipse(cw / 2, ch * 0.88, cw * 0.32, 8, 0, 0, Math.PI * 2);
+  c.ellipse(cw / 2, ch * 0.92, cw * 0.30, 6, 0, 0, Math.PI * 2);
   c.fill();
 
-  // draw player using same body code, but on this context
+  // Render the player using the same body code, with global ctx temporarily swapped.
+  const oldCtx = ctx;
   ctx = c;
-  c.save();
-  c.translate(cw / 2, ch * 0.92);
-  c.scale(0.95, 0.95);
-  drawPlayerBody(0, 0, 'dribble', skin);
-  c.restore();
-  ctx = mainCtx;
+  try {
+    c.save();
+    c.translate(cw / 2, ch * 0.94);
+    const sc = ch / 230;
+    c.scale(sc, sc);
+    drawPlayerBody(0, 0, 'dribble', skin);
+    c.restore();
+  } finally {
+    ctx = oldCtx;
+  }
+
+  if (!owned) {
+    // Light desat veil; CSS adds the rest
+    c.fillStyle = 'rgba(10, 5, 24, 0.25)';
+    c.fillRect(0, 0, cw, ch);
+  }
+}
+
+// Big animated hero canvas. Called every frame from main loop while shop is open.
+function drawHeroPreview(reset) {
+  if (!heroPreviewEl) return;
+  if (reset) shopAnimT = 0;
+  const skin = getSkin(selectedShopSkinId);
+  const c = heroPreviewEl.getContext('2d');
+  const cw = heroPreviewEl.width;
+  const ch = heroPreviewEl.height;
+  c.clearRect(0, 0, cw, ch);
+
+  // Spotlight + floor disc
+  const grad = c.createRadialGradient(cw / 2, ch * 0.85, cw * 0.05, cw / 2, ch * 0.85, cw * 0.55);
+  grad.addColorStop(0, 'rgba(255, 204, 51, 0.22)');
+  grad.addColorStop(1, 'rgba(255, 204, 51, 0)');
+  c.fillStyle = grad;
+  c.beginPath();
+  c.ellipse(cw / 2, ch * 0.92, cw * 0.45, 18, 0, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  c.beginPath();
+  c.ellipse(cw / 2, ch * 0.94, cw * 0.30, 9, 0, 0, Math.PI * 2);
+  c.fill();
+
+  // Body + gentle running animation
+  const bob = Math.sin(shopAnimT * 6) * 3;
+  const runT = shopAnimT * 9;
+  const legSwing = Math.sin(runT) * 9;
+
+  const oldCtx = ctx;
+  ctx = c;
+  try {
+    c.save();
+    c.translate(cw / 2, ch * 0.92 + bob);
+    const sc = ch / 230;
+    c.scale(sc, sc);
+    drawPlayerBody(legSwing, runT, 'dribble', skin);
+    c.restore();
+  } finally {
+    ctx = oldCtx;
+  }
+}
+
+function renderShopFrame(dt) {
+  if (state !== STATE.SHOP) return;
+  shopAnimT += dt;
+  drawHeroPreview(false);
 }
 
 
